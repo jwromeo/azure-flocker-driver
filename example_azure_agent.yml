@@ -1,0 +1,8 @@
+version: 1
+control-service:
+  hostname: "control-service"
+dataset:
+  backend: "azure_storage"
+  service_name: ""
+  azure_managment_cerficiate_data: ""
+  azure_subscription_id: ""
