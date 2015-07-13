@@ -1,4 +1,5 @@
 import time
+import sys
 from uuid import UUID
 import logging
 import requests
@@ -19,7 +20,7 @@ from twisted.internet import defer, task, reactor
 from twisted.python.filepath import FilePath
 
 from flocker.node.agents.blockdevice import (
-    AlreadyAttachedVolume, IBlockDeviceAsyncAPI,
+    AlreadyAttachedVolume, IBlockDeviceAPI,
     BlockDeviceVolume, UnknownVolume, UnattachedVolume
 )
 
@@ -130,7 +131,7 @@ class UnsupportedVolumeSize(Exception):
         Exception.__init__(self, dataset_id)
         self.dataset_id = dataset_id
 
-@implementer(IBlockDeviceAsyncAPI)
+@implementer(IBlockDeviceAPI)
 class AzureStorageBlockDeviceAPI(object):
     """
     An ``IBlockDeviceAsyncAPI`` which uses Azure Storage Backed Block Devices
@@ -164,11 +165,11 @@ class AzureStorageBlockDeviceAPI(object):
         ScaleIO Stored a UUID in the SDC kernel module.
         """
         # Node host names should be unique within a vnet
-        return socket.gethostname()
+        return unicode(socket.gethostname())
 
-    def _wait_for_async(request_id, timeout):
+    def _wait_for_async(self, request_id, timeout):
         count = 0
-        result = sms.get_operation_status(request_id)
+        result = self._azure_client.get_operation_status(request_id)
         while result.status == 'InProgress':
             count = count + 1
             if count > timeout:
@@ -177,7 +178,7 @@ class AzureStorageBlockDeviceAPI(object):
             time.sleep(5)
             print('.'),
             sys.stdout.flush()
-            result = sms.get_operation_status(request_id)
+            result = self._azure_client.get_operation_status(request_id)
             if result.error:
                 print(result.error.code)
                 print(vars(result.error))
@@ -187,14 +188,23 @@ class AzureStorageBlockDeviceAPI(object):
 
         return int(GiB(size).to_Byte().value)
 
-    def _blockdevicevolume_from_azure_volume(self, disk):
-
+    def _blockdevicevolume_from_azure_volume(self, disk, attached_to_name=None):
+	
+	label = None
+	
+	if disk.__class__.__name__ == 'DataVirtualHardDisk':
+	    # this is returned by a callt o get_data_disk
+	   label = disk.disk_label
+	else:
+	   label = disk.label
+	   attached_to_name = disk.attached_to.role_name
+	
         return BlockDeviceVolume(
-            blockdevice_id=disk.name,
+            blockdevice_id=unicode(self._blockdevice_id_for_disk_label(label)),
             size=self._gibytes_to_bytes(disk.logical_disk_size_in_gb),
-            attached_to=disk.attached_to.role_name,
+            attached_to=attached_to_name,
             # disk labels are formatted as flocker-<data_set_id>
-            dataset_id=self._blockdevice_id_for_disk_label(disk.label)
+            dataset_id=self._blockdevice_id_for_disk_label(label)
             )
 
     def _compute_next_remote_lun(instance_name):
@@ -232,7 +242,8 @@ class AzureStorageBlockDeviceAPI(object):
         if(size_in_gb % 1 != 0):
             raise UnsupportedVolumeSize(dataset_id)
 
-        print 'creating disk with parameters:'
+        print 'creating disk for dataset: '
+	print dataset_id
         print 'service_name/deployment_name:' + self._service_name
         print 'role_name' + self.compute_instance_id()
         print 'lun:' + str(lun)
@@ -309,7 +320,8 @@ class AzureStorageBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume`` with a ``host`` attribute set to
             ``host``.
         """
-        
+        print 'attchinb volume for blockdevice:'
+        print blockdevice_id
         target_disk, role_name, lun = self._get_disk_vmname_lun(blockdevice_id)
 
         if role_name != None or lun != None:
@@ -388,18 +400,22 @@ class AzureStorageBlockDeviceAPI(object):
 
         return disk_list
 
-    def _get_disk__vmname_lun(self, blockdevice_id):
+    def _get_disk_vmname_lun(self, blockdevice_id):
         target_disk = None
         target_lun = None
         disk_list = self._azure_client.list_disks()
+	
+        for d in disk_list:
+	    
+	    if not 'flocker-' in d.label:
+		continue;
 
-        for d in disks:
-            if d.blockdevice_id == self._disk_label_for_blockdevice_id(blockdevice_id):
+	    if self._blockdevice_id_for_disk_label(d.label) == self._disk_label_for_blockdevice_id(blockdevice_id):
                 target_disk = d
                 break
 
         if target_disk == None:
-            raise UnknownVolume
+            raise UnknownVolume(blockdevice_id)
 
         vm_info = self._azure_client.get_role(self._service_name, self._service_name, target_disk.attached_to.role_name)
         
