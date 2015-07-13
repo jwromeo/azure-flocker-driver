@@ -43,11 +43,12 @@ class Lun(object):
     @staticmethod
     def compute_next_lun():
         # force the latest scsci info
-        # subprocess.call(['fdisk','-l'])
+        with open(os.devnull, 'w') as shutup:
+	    subprocess.call(['sudo', 'fdisk','-l'], stdout=shutup, stderr=shutup)
         disk_info_string = subprocess.check_output('lsscsi')
         parts = disk_info_string.strip('\n').split('\n')
         lun = -1
-
+	count = 0
         for i in range(0, len(parts)):
             
             line = parts[i]
@@ -58,17 +59,17 @@ class Lun(object):
             if int(segments[1]) != 5:
                 continue
 
-            next_lun = int(segments[3]);
+            next_lun = int(segments[4]);
 
 
-            if next_lun - i > 1:
+            if next_lun - count > 1:
                 lun = next_lun - 1
                 break 
             
             if i == len(parts) - 1:
                 lun = next_lun + 1
                 break 
-        
+            count += 1
             lun = next_lun
         
         return lun
@@ -76,7 +77,8 @@ class Lun(object):
     @staticmethod
     def get_attached_luns_list():
         # force the latest scsci info
-        # subprocess.call(['fdisk','-l'])
+        with open(os.devnull, 'w') as shutup:
+		subprocess.call(['sudo','fdisk','-l'], stdout=shutup, stderr=shutup)
         disk_info_string = subprocess.check_output('lsscsi')
         parts = disk_info_string.strip('\n').split('\n')
         lun = -1
@@ -245,9 +247,9 @@ class AzureStorageBlockDeviceAPI(object):
             deployment_name=self._service_name,
             role_name=self.compute_instance_id(),
             lun=lun,
-            disk_label= self._disk_label_for_blockdevice_id(dataset_id),
             media_link='https://'+ self._storage_account_name + '.blob.core.windows.net/flocker/' + self.compute_instance_id() + '-' + self._disk_label_for_blockdevice_id(dataset_id),
-            logical_disk_size_in_gb=str(size_in_gb))
+            disk_label= self._disk_label_for_blockdevice_id(dataset_id),
+            logical_disk_size_in_gb='{0:.0f}'.format(size_in_gb))
 
         self._wait_for_async(request.request_id, 5000)
 
