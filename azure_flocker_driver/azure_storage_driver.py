@@ -5,12 +5,13 @@ import requests
 import json
 import socket
 import re
-
-from subprocess import check_output
+import os
+import subprocess
 
 from bitmath import Byte, GiB, MiB, KiB
 
-from azure.servicemanagement import ServiceManagement
+from azure import WindowsAzureMissingResourceError
+from azure.servicemanagement import ServiceManagementService
 
 from eliot import Message, Logger
 from zope.interface import implementer, Interface
@@ -31,6 +32,101 @@ _logger = Logger()
 # Azure's allocation granularity is 1GB
 ALLOCATION_GRANULARITY = 1
 
+class Lun(object):
+
+    device_path = ''
+    lun = ''
+
+    def __init__():
+        return
+
+    @staticmethod
+    def compute_next_lun():
+        # force the latest scsci info
+        # subprocess.call(['fdisk','-l'])
+        disk_info_string = subprocess.check_output('lsscsi')
+        parts = disk_info_string.strip('\n').split('\n')
+        lun = -1
+
+        for i in range(0, len(parts)):
+            
+            line = parts[i]
+            segments = re.split(':|]|\[', line)
+
+            print 'computed nextlun:'
+
+            if int(segments[1]) != 5:
+                continue
+
+            next_lun = int(segments[3]);
+
+
+            if next_lun - i > 1:
+                lun = next_lun - 1
+                break 
+            
+            if i == len(parts) - 1:
+                lun = next_lun + 1
+                break 
+        
+            lun = next_lun
+        
+        return lun
+
+    @staticmethod
+    def get_attached_luns_list():
+        # force the latest scsci info
+        # subprocess.call(['fdisk','-l'])
+        disk_info_string = subprocess.check_output('lsscsi')
+        parts = disk_info_string.strip('\n').split('\n')
+        lun = -1
+        lun_list = []
+
+        if len(parts) <= 2:
+            return lun_list
+
+        for i in range(2, len(parts)):
+            lun = Lun()
+            line = parts[i]
+            segments = re.split(':|]| ', line)
+            lun.lun = int(segments[3]);
+            lun.device_path = segments(segments[len(segments) - 1])
+
+            
+            lun_list.append(lun)
+
+        
+        return lun_list
+
+    @staticmethod
+    # Returns a string representing the block device path based
+    # on a provided lun slot
+    def get_device_path_for_lun(lun):
+
+        if lun > 32:
+            raise Exception('valid lun parameter is 0 - 32, inclusive')
+        base = '/dev/sd'
+
+        # luns go 0-32
+        ascii_base = ord('c')
+
+        return '/dev/sd' + chr(ascii_base + lun)
+
+class UnsupportedVolumeSize(Exception):
+    """
+    The volume size is not supported
+    Needs to be 8GB allocation granularity
+    :param unicode dataset_id: The volume dataset_id
+    """
+    def __init__(self, dataset_id):
+        if not isinstance(dataset_id, UUID):
+            raise TypeError(
+                'Unexpected dataset_id type. '
+                'Expected unicode. '
+                'Got {!r}.'.format(dataset_id)
+            )
+        Exception.__init__(self, dataset_id)
+        self.dataset_id = dataset_id
 
 @implementer(IBlockDeviceAsyncAPI)
 class AzureStorageBlockDeviceAPI(object):
@@ -39,15 +135,16 @@ class AzureStorageBlockDeviceAPI(object):
     Current Support: Azure SMS
     """
 
-    def __init__(self, azure_client, cluster_id, service_name, storage_account_name):
+    def __init__(self, azure_client, service_name, deployment_name, storage_account_name):
         """
-        :param ScaleIO sio_client: An instance of ScaleIO requests
-            client.
-        :param UUID cluster_id: An ID that will be included in the
+        :param ServiceManagement azure_client: an instance of the azure 
+        serivce managment api client.
+        :param String service_name: The name of the service. For SMS api deployments
+        this is the cloud service name
+        :param 
             names of ScaleIO volumes to identify cluster
         :returns: A ``BlockDeviceVolume``.
         """
-        self._cluster_id = cluster_id
         self._instance_id = self.compute_instance_id()
         self._azure_client = azure_client
         self._service_name = service_name
@@ -67,144 +164,55 @@ class AzureStorageBlockDeviceAPI(object):
         # Node host names should be unique within a vnet
         return socket.gethostname()
 
-    def _compute_next_lun():
-        # force the latest scsci info
-        subprocess.call('sudo fdisk -l')
-        disk_info_string = subprocess.check_output('lsscsi')
-        parts = disk_info_string.strip('\n').split('\n')
-        lun = -1
+    def _wait_for_async(request_id, timeout):
+        count = 0
+        result = sms.get_operation_status(request_id)
+        while result.status == 'InProgress':
+            count = count + 1
+            if count > timeout:
+                print('Timed out waiting for async operation to complete.')
+                return
+            time.sleep(5)
+            print('.'),
+            sys.stdout.flush()
+            result = sms.get_operation_status(request_id)
+            if result.error:
+                print(result.error.code)
+                print(vars(result.error))
+        print result.status + ' in ' + str(count*5) + 's'
 
-        if len(parts) <= 2:
-            return 0
-
-        for i in range(2, len(parts)):
-
-            line = parts[i]
-            next_lun = int(re.split(':|]', line)[3]);
-
-            if nex_lun - i > 1
-                lun = next_lun - 1
-                break 
-        
-            if i == len(parts) - 1:
-                lun = next_lun + 1
-                break 
-        
-            lun = next_lun
-        
-        return lun
-
-    def _get_attached_luns_list():
-        # force the latest scsci info
-        subprocess.call('sudo fdisk -l')
-        disk_info_string = subprocess.check_output('lsscsi')
-        parts = disk_info_string.strip('\n').split('\n')
-        lun = -1
-        lun_list = []
-
-        if len(parts) <= 2:
-            return lun_list
-
-        for i in range(2, len(parts)):
-
-            line = parts[i]
-            next_lun = int(re.split(':|]', line)[3]);
-
-            lun_list.append(next_lun)
-
-        
-        return lun_list
-
-    def _watch_request_deferred(request_id, timeout):
-            
-            def _wait_for_async(*args):
-                request_id = args[0]
-                timeout = args[1]
-                deferred = args[2]
-                count = 0
-                result = self._azure_client.get_operation_status(request_id)
-
-                while result.status == 'InProgress':
-                    count = count + 1
-                    if count > timeout:
-                        return deferred.errback('Timed out waiting for async operation to complete.')
-                    time.sleep(.1)
-                    print('.'),
-                    sys.stdout.flush()
-                    result = self._azure_client.get_operation_status(request_id)
-                    if result.error:
-                        print(result.error.code)
-                        print(vars(result.error))
-                        return deferred.errback(result)
-                print result.status + ' in ' + str(count*5) + 's'
-                deferred.callback(result)
-
-            deferred = defer.Deferred()
-            reactor.callInThread(_wait_for_async, request_id, timeout, deferred)
-
-            return deferred
-
-    def _get_deferred_for_sync(sync_func):
-        print 'calling sync wrapper!'
-
-        def run_sync_func(sync_func, deferred):
-            try:
-                result = sync_func()
-                deferred.callback(result)
-            except Exception as inst:
-                deferred.errback(inst)
-
-        deferred = defer.Deferred()
-        reactor.callInThread(run_sync_func, sync_func, deferred)
-
-        return deferred
-
-    def _get_deferred_for_sync_kwargs(sync_func, kwargs):
-        print 'calling keword wrapper!'
-
-        def run_sync_func(sync_func, deferred, kwargs):
-            try:
-                result = sync_func(**kwargs)
-                deferred.callback(result)
-            except Exception as inst:
-                deferred.errback(inst)
-
-        deferred = defer.Deferred()
-        reactor.callInThread(run_sync_func, sync_func, deferred, kwargs)
-
-        return deferred
-
-    def _get_deferred_for_sync_args(sync_func, args):
-
-        print 'calling args wrapper!'
-        def run_sync_func(sync_func, deferred, args):
-            try:
-                result = sync_func(*args)
-                deferred.callback(result)
-            except Exception as inst:
-                deferred.errback(inst)
-
-        deferred = defer.Deferred()
-        reactor.callInThread(run_sync_func, sync_func, deferred, args)
-
-        return deferred
-
-    def _gibytes_to_bytes(size):
+    def _gibytes_to_bytes(self, size):
 
         return int(GiB(size).to_Byte().value)
 
-
-    def _blockdevicevolume_from_azure_volume(disk_info, dataset_id):
+    def _blockdevicevolume_from_azure_volume(self, disk):
 
         return BlockDeviceVolume(
-            blockdevice_id=disk_info.disk_label,
-            size=self.__gibytes_to_bytes(logical_disk_size_in_gb),
-            attached_to=self.compute_instance_id()
-            dataset_id=dataset_id
+            blockdevice_id=disk.name,
+            size=self._gibytes_to_bytes(disk.logical_disk_size_in_gb),
+            attached_to=disk.attached_to.role_name,
+            # disk labels are formatted as flocker-<data_set_id>
+            dataset_id=self._blockdevice_id_for_disk_label(disk.label)
             )
 
-    # azure api forces you to attach upon creation
-    @check_login
+    def _compute_next_remote_lun(instance_name):
+        vm_info = self._azure_client.get_role(self._service_name, self._service_name, instance_name)
+        next_lun = 0
+        for i in range(0, len(vm_info.data_virtual_hard_disks)):
+            lun = vm_info.data_virtual_hard_disks[i].lun
+            if next_lun - i > 1:
+                next_lun = next_lun - 1
+                return next_lun
+
+            next_lun = i
+
+        if next_lun == len(vm_info.data_virtual_hard_disks) - 1:
+            next_lun += 1
+
+        return next_lun
+
+    
+
     def create_volume(self, dataset_id, size):
         """
         Create a new volume.
@@ -215,45 +223,49 @@ class AzureStorageBlockDeviceAPI(object):
             the volume has been created.
         """
 
+        lun = Lun.compute_next_lun()
 
-        lun = _compute_next_lun()
+        size_in_gb = Byte(size).to_GiB().value
 
-        def _watch_request(result):
-            print 'watching:' + result.request_id
-            return _watch_request_deferred(result.request_id, 5000)
+        if(size_in_gb % 1 != 0):
+            raise UnsupportedVolumeSize(dataset_id)
 
-        def _azure_volume_info(result):
-            args = (self._service_name, self._service_name, self.compute_instance_id(), lun)
-            return self._get_deferred_for_sync(self._azure_client.get_data_disk, args)
+        print 'creating disk with parameters:'
+        print 'service_name/deployment_name:' + self._service_name
+        print 'role_name' + self.compute_instance_id()
+        print 'lun:' + str(lun)
+        print 'disk_label:' + self._disk_label_for_blockdevice_id(dataset_id)
+        print 'media_link:' + 'https://'+ self._storage_account_name + '.blob.core.windows.net/flocker/' + self.compute_instance_id() + '-' + self._disk_label_for_blockdevice_id(dataset_id)
+        print 'size:' + str(size_in_gb)
 
-        def _create_block_device(result):
-            return self._blockdevicevolume_from_azure_volume(result, dataset_id)
+        # azure api only allows us to create a data disk when we are
+        # attaching. so to work-around we have to attach to this node
+        # and then detach
+        request = self._azure_client.add_data_disk(service_name=self._service_name,
+            deployment_name=self._service_name,
+            role_name=self.compute_instance_id(),
+            lun=lun,
+            disk_label= self._disk_label_for_blockdevice_id(dataset_id),
+            media_link='https://'+ self._storage_account_name + '.blob.core.windows.net/flocker/' + self.compute_instance_id() + '-' + self._disk_label_for_blockdevice_id(dataset_id),
+            logical_disk_size_in_gb=str(size_in_gb))
 
-        def _failed(result):
-            print 'error'
-            print result
+        self._wait_for_async(request.request_id, 5000)
 
-        deferred = self._get_deferred_for_sync_kwargs(self._azure_client.add_data_disk, {'service_name':'sedouard-dokku',
-            'deployment_name':'sedouard-dokku',
-            'role_name':'sedouard-dokku',
-            'lun':1,
-            'disk_label': self._disk_label_for_blockdevice_id(dataset_id),
-            'disk_name': self._disk_label_for_blockdevice_id(dataset_id),
-            'media_link':'https://'+ _storage_account_name + '.blob.core.windows.net/flocker/' + self.compute_instance_id() + '-' + dataset_id,
-            'logical_disk_size_in_gb':12,
-            'disk_name': })
+        disk = self._azure_client.get_data_disk(self._service_name, self._service_name, self.compute_instance_id(), lun)
 
-        deferred.addCallback(_watch_request)
-        deferred.addCallback(_azure_volume_info)
-        deferred.addCallback(_create_block_device)
-        deferred.addErrback(_failed)
+        return self._blockdevicevolume_from_azure_volume(disk)
 
-    def _disk_label_for_blockdevice_id(blockdevice_id):
+    def _disk_label_for_blockdevice_id(self, blockdevice_id):
         # need to mark flocker disks to differentiate from other
         # disks in subscription disk repository
-        return 'flocker-' + blockdevice_id
+        label = 'flocker-' + str(blockdevice_id)
+        return label
 
-    @check_login
+    def _blockdevice_id_for_disk_label(self, disk_label):
+        print 'getting uuid for:'
+        print disk_label
+        return UUID(disk_label.replace('flocker-', ''))
+
     def destroy_volume(self, blockdevice_id):
         """
         Destroy an existing volume.
@@ -263,23 +275,23 @@ class AzureStorageBlockDeviceAPI(object):
             exist.
         :return: ``None``
         """
+        target_disk, role_name, lun = self._get_disk_vmname_lun(blockdevice_id)
 
-        def _disk_not_found(result):
-            if result.status == 'ResourceNotFound':
-                raise UnknownVolume(blockdevice_id)
+        if target_disk == None:
+            return UnknownVolume(blockdevice_id)
 
-            raise Exception(result)
+        if target_disk.attached_to != None:
+            request = self.delete_data_disk(
+                    service_name=self._service_name,
+                    deployment_name=self.service_name,
+                    role_name=role_name,
+                    lun=lun,
+                    delete_vhd=True)
+        else:
+            request = self._azure_client.delete_disk(target_disk.name, True)
+            self._wait_for_async(request.request_id, 5000)
 
-        def _delete_disk(result):
-            self._get_deferred_for_sync_args(self.azure_client.delete_disk, self._disk_label_for_blockdevice_id(blockdevice_id), True)
 
-        deferred = self._get_deferred_for_sync_args(self.azure_client.get_disk, self._disk_label_for_blockdevice_id(blockdevice_id))
-        deferred.addCallback(_delete_disk)
-        deferred.addErrback(_disk_not_found)
-        
-        return deferred
-
-    @check_login
     def attach_volume(self, blockdevice_id, attach_to):
         """
         Attach ``blockdevice_id`` to ``host``.
@@ -295,38 +307,23 @@ class AzureStorageBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume`` with a ``host`` attribute set to
             ``host``.
         """
-        def _disk_not_found(result):
-            if result.status == 'ResourceNotFound':
-                raise UnknownVolume(blockdevice_id)
+        
+        target_disk, role_name, lun = self._get_disk_vmname_lun(blockdevice_id)
 
-            raise Exception(result)
+        if role_name != None or lun != None:
+            raise AlreadyAttachedVolume(blockdevice_id)
 
-        def _attach_disk(disk):
-            if disk.attached_to != None:
-                raise AlreadyAttachedVolume(blockdevice_id)
-
-            return self._get_deferred_for_sync_kwargs(self.azure_client.add_data_disk, service_name=self._service_name,
-                deployment_name=self._service_name,
-                role_name=attach_to,
-                lun=self._compute_next_lun(),
-                disk_label=self._disk_label_for_blockdevice_id(blockdevice_id),
-                media_link='https://'+ _storage_account_name + '.blob.core.windows.net/flocker/' + attach_to + '-' + blockdevice_id)
-
-        def _watch_request(request):
-            return self._watch_request_deferred(request.request_id, 5000)
-
-        def _create_disk(result):
-            return self._blockdevicevolume_from_azure_volume(result, dataset_id)
-
-        deferred = self._get_deferred_for_sync_args(self.azure_client.get_disk, self._disk_label_for_blockdevice_id(blockdevice_id))
-        deferred.addCallback(_attach_disk)
-        deferred.addCallback(_watch_request)
-        deferred.addErrback(_disk_not_found)
-
-        return deferred
+        request = self.add_data_disk(
+                    service_name=self._service_name,
+                    deployment_name=self.service_name,
+                    role_name=role_name,
+                    lun=self._compute_next_remote_lun(role_name),
+                    disk_name=target_disk.name)
+        
+        return self._wait_for_async(request.request_id, 5000)
 
 
-    @check_login
+
     def detach_volume(self, blockdevice_id):
         """
         Detach ``blockdevice_id`` from whatever host it is attached to.
@@ -338,76 +335,22 @@ class AzureStorageBlockDeviceAPI(object):
             not attached to anything.
         :returns: ``None``
         """
-        current_lun = 0
-        count = 0
-        lun_list = self._get_attached_luns_list()
-        current_lun = lun_list[0]
-  
-        if len(lun_list) == 0:
-            Message.new(Error="Could Not Detach Volume "
-                        + str(blockdevice_id)
-                        + "is unattached").write(_logger)
+        target_disk, role_name, lun = self._get_disk_vmname_lun(blockdevice_id)
+        
+        if lun == None:
             raise UnattachedVolume(blockdevice_id)
 
-        def _check_if_exists(result):
-            if result.status == 'ResourceNotFound':
-                raise UnknownVolume(blockdevice_id)
-
-        def _get_data_disk():
-            deferred = self._get_deferred_for_sync_kwargs(self._azure_client.get_data_disk,
-            service_name=self._service_name,
-            deployment_name=self._service_name,
-            role_name=self.compute_instance_id(),
-            lun=lun)
-
-            return deferred
-
-        def _return(result):
-            # todo do we need to swallow the result so that we
-            # conform to the interface returning nothing?
-            return
-
-        
- 
-        def _check_if_correct_disk(disk):
-
-            count++
-
-            if disk.disk_label === self._disk_label_for_blockdevice_id(blockdevice_id):
-                deferred = self._get_deferred_for_sync_kwargs(self.delete_data_disk,
+        # contrary to function name it doesn't delete by default, just detachs
+        request = self.delete_data_disk(
                     service_name=self._service_name,
                     deployment_name=self.service_name,
-                    role_name=self.compute_instance_id(),
-                    lun=current_lun)
+                    role_name=role_name,
+                    lun=lun)
 
-                deferred.addCallback(_return)
+        
+        return _wait_for_async(request.request_id, 5000)
 
-                return deferred
 
-            if count >= len(lun_list)
-                raise UnattachedVolume(blockdevice_id)
-
-            # this isn't the right disk, try the next attached one
-            current_lun = lun_list[count]
-
-            deferred = self._get_deferred_for_sync_kwargs(self._azure_client.get_data_disk,
-                service_name=self._service_name,
-                deployment_name=self._service_name,
-                role_name=self.compute_instance_id(),
-                lun=current_lun)
-
-            deferred.addCallback(_check_if_correct_disk)
-
-            return deferred
-
-        deferred = self._get_deferred_for_sync_args(self.azure_client.get_disk, self._disk_label_for_blockdevice_id(blockdevice_id))
-        deferred.addErrback(_check_if_exists)
-        deferred.addCallback(_get_data_disk)
-        deferred.addCallback(_check_if_correct_disk)
-
-        return deferred
-
-    @check_login
     def get_device_path(self, blockdevice_id):
         """
         Return the device path that has been allocated to the block device on
@@ -420,51 +363,54 @@ class AzureStorageBlockDeviceAPI(object):
             not attached to a host.
         :returns: A ``FilePath`` for the device.
         """
-        lun_list = self._get_attached_luns_list
+        target_disk, role_name, lun = self._get_disk_vmname_lun(blockdevice_id)
 
-        def _check_if_exists(result):
-            if result.status == 'ResourceNotFound':
-                raise UnknownVolume(blockdevice_id)
+        if lun == None:
+            raise UnattachedVolume(blockdevice_id)
 
-        def _get_disk():
-            if len(lun_list) === 0
-                return UnattachedVolume
+        return Lun.get_device_path_for_lun(lun)
 
-            args = (self._service_name, self._service_name, self.compute_instance_id(), lun)
-            deferred = self._get_deferred_for_sync_args(self._azure_client.get_data_disk, args)
-            return deferred
-
-        def _get_device_path():
-            self._get_attached_luns_list
-
-        deferred = self._get_deferred_for_sync(self.get_disk, self._disk_label_for_blockdevice_id(blockdevice_id))
-        deferred.addErrback(_check_if_exists)
-        deferred.addCallback(_get_disk)
-        deferred.addCallback(_)
-        deferred.addCallback(_get_device_path)
-
-    @check_login
     def list_volumes(self):
         """
         List all the block devices available via the back end API.
         :returns: A ``list`` of ``BlockDeviceVolume``s.
         """
+
+        disks = self._azure_client.list_disks()
+        disk_list = []
+        for d in disks:
+            # flocker disk labels are formatted as 'flocker-DATASET_ID_GUID'
+            if not 'flocker-' in d.label: continue
+            print d.name
+            disk_list.append(self._blockdevicevolume_from_azure_volume(d))
+
+        return disk_list
+
+    def _get_disk__vmname_lun(self, blockdevice_id):
+        target_disk = None
+        target_lun = None
+        disk_list = self._azure_client.list_disks()
+
+        for d in disks:
+            if d.blockdevice_id == self._disk_label_for_blockdevice_id(blockdevice_id):
+                target_disk = d
+                break
+
+        if target_disk == None:
+            raise UnknownVolume
+
+        vm_info = self._azure_client.get_role(self._service_name, self._service_name, target_disk.attached_to.role_name)
         
-        def _build_volume_list(disks):
-            disk_list = []
-            for d in disks:
-                disk_list.append(self._blockdevicevolume_from_azure_volume(d))
+        for d in vm_info.data_virtual_hard_disks:
+            if d.name == target_disk.name:
+                target_lun = target_disk.lun
+                break
 
-            return disk_list
+        return target_disk, target_disk.attach_to.role_name, target_lun
 
-        deferred = self._get_deferred_for_sync(self._azure_client.list_disks)
-        deferred.addCallback(_build_volume_list)
-
-        return deferred
-
-def azure_driver_from_configuration(service_name, subscription_id, certificate_data, debug):
+def azure_driver_from_configuration(service_name, subscription_id, storage_account_name, certificate_data_path, debug=None):
     """
-    Returns Flocker ScaleIO BlockDeviceAPI from plugin config yml.
+    Returns Flocker Azure BlockDeviceAPI from plugin config yml.
         :param uuid cluster_id: The UUID of the cluster
         :param string username: The username for ScaleIO Driver,
             this will be used to login and enable requests to
@@ -488,3 +434,12 @@ def azure_driver_from_configuration(service_name, subscription_id, certificate_d
         :param boolean debug: verbosity
     """
     # todo return azure storage driver api
+
+    if not os.path.isfile(certificate_data_path):
+        raise IOError('Certificate ' + certificate_data_path + ' does not exist')
+    sms = ServiceManagementService(subscription_id, certificate_data_path)
+    return AzureStorageBlockDeviceAPI(
+        sms,
+        service_name,
+        service_name,
+        storage_account_name)

@@ -1,37 +1,17 @@
 from flocker.node import BackendDescription, DeployerType
-from .emc_sio import (
-    scaleio_from_configuration, DEFAULT_STORAGE_POOL,
-    DEFAULT_PROTECTION_DOMAIN, DEFAULT_PORT, DEBUG
+from .azure_storage_driver import (
+    azure_driver_from_configuration
 )
 
-def api_factory(cluster_id, **kwargs):
+def api_factory(**kwargs):
 
-    protection_domain = DEFAULT_PROTECTION_DOMAIN
-    if "protection_domain" in kwargs:
-       protection_domain = kwargs[u"protection_domain"]
-
-    storage_pool = DEFAULT_STORAGE_POOL
-    if "storage_pool" in kwargs:
-       storage_pool= kwargs[u"storage_pool"]
-
-    port = DEFAULT_PORT
-    if "port" in kwargs:
-       port= kwargs[u"port"]
-
-    debug = DEBUG
-    if "debug" in kwargs:
-       debug = kwargs[u"debug"]
-
-    certificate = None
-    if "certificate" in kwargs:
-       certificate= kwargs[u"certificate"]
-
-    return scaleio_from_configuration(cluster_id=cluster_id, username=kwargs[u"username"],
-                        password=kwargs[u"password"], mdm_ip=kwargs[u"mdm"], port=port,
-                        protection_domain=protection_domain, storage_pool=storage_pool,
-                        certificate=certificate, ssl=kwargs[u"ssl"], debug=debug)
+    return azure_driver_from_configuration(service_name=kwargs[u"service_name"],
+          subscription_id=kwargs[u"subscription_id"],
+          storage_account_name=kwargs[u"storage_account_name"],
+          certificate_data_path=kwargs[u"./azure-cert.pem"],
+          debug=kwargs[u"debug"])
 
 FLOCKER_BACKEND = BackendDescription(
-    name=u"scaleio_flocker_driver",
-    needs_reactor=False, needs_cluster_id=True,
+    name=u"azure_flocker_driver",
+    needs_reactor=True, needs_cluster_id=False,
     api_factory=api_factory, deployer_type=DeployerType.block)

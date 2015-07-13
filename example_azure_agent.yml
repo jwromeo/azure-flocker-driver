@@ -1,8 +1,4 @@
-version: 1
-control-service:
-  hostname: "control-service"
-dataset:
-  backend: "azure_storage"
-  service_name: ""
-  azure_managment_cerficiate_data: ""
-  azure_subscription_id: ""
+azure_settings:
+  service_name: "sedouard-dokku"
+  azure_management_certificate_path: "./azure-cert.pem"
+  azure_subscription_id: "04f7ec88-8e28-41ed-8537-5e17766001f5"

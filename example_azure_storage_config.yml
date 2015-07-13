@@ -1,0 +1,6 @@
+azure_settings:
+  service_name: "cloud service name"
+  management_certificate_path: "path/to/cert.pem"
+  subscription_id: "subscription-id"
+  storage_account_name: "storage-account-name"
+  debug: "true"

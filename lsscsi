@@ -1,0 +1,2 @@
+#!/usr/bin/env python
+print '[1:0:0:0]    cd/dvd  Msft     Virtual CD/ROM   1.0   /dev/sr0 \n[2:0:0:0]    disk    Msft     Virtual Disk     1.0   /dev/sda \n[3:0:1:0]    disk    Msft     Virtual Disk     1.0   /dev/sdb \n[5:0:0:0]    disk    Msft     Virtual Disk     1.0   /dev/sdc '

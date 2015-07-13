@@ -3,8 +3,23 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Mac OS X
+.DS_STORE
+
+# Temp Flocker
+azure_flocker_driver/flocker
+
+# Twisted Test Trial Temp folder
+_trial_temp
+
 # C extensions
 *.so
+
+# Secret Config Settings
+azure_storage_config.yml
+
+# Certs/Keys
+*.pem
 
 # Distribution / packaging
 .Python
