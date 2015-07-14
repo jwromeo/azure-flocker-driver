@@ -11,7 +11,7 @@ import subprocess
 
 from bitmath import Byte, GiB, MiB, KiB
 
-from azure import WindowsAzureMissingResourceError
+from azure import WindowsAzureMissingResourceError, WindowsAzureConflictError
 from azure.servicemanagement import ServiceManagementService
 
 from eliot import Message, Logger
@@ -63,7 +63,7 @@ class Lun(object):
             next_lun = int(segments[4]);
 
 
-            if next_lun - count > 1:
+            if next_lun - count >= 1:
                 lun = next_lun - 1
                 break 
             
@@ -197,7 +197,8 @@ class AzureStorageBlockDeviceAPI(object):
 	   label = disk.disk_label
 	else:
 	   label = disk.label
-	   attached_to_name = disk.attached_to.role_name
+	   if disk.attached_to != None:
+	   	attached_to_name = disk.attached_to.role_name
 	
         return BlockDeviceVolume(
             blockdevice_id=unicode(self._blockdevice_id_for_disk_label(label)),
@@ -207,22 +208,23 @@ class AzureStorageBlockDeviceAPI(object):
             dataset_id=self._blockdevice_id_for_disk_label(label)
             )
 
-    def _compute_next_remote_lun(instance_name):
-        vm_info = self._azure_client.get_role(self._service_name, self._service_name, instance_name)
-        next_lun = 0
-        for i in range(0, len(vm_info.data_virtual_hard_disks)):
-            lun = vm_info.data_virtual_hard_disks[i].lun
-            if next_lun - i > 1:
-                next_lun = next_lun - 1
-                return next_lun
+    def _compute_next_remote_lun(self, role_name):
+       vm_info = self._azure_client.get_role(self._service_name, self._service_name, role_name)
+       vm_info.data_virtual_hard_disks = sorted(vm_info.data_virtual_hard_disks, key=lambda obj: obj.lun)
+       lun = 0
+       for i in range(0, len(vm_info.data_virtual_hard_disks)):
+           next_lun = vm_info.data_virtual_hard_disks[i].lun
 
-            next_lun = i
+           if next_lun - i >= 1:
+               lun = next_lun - 1
+               break
 
-        if next_lun == len(vm_info.data_virtual_hard_disks) - 1:
-            next_lun += 1
+           if i == len(vm_info.data_virtual_hard_disks) -1:
+               lun = next_lun + 1
+               break
 
-        return next_lun
 
+       return lun
     
 
     def create_volume(self, dataset_id, size):
@@ -263,11 +265,17 @@ class AzureStorageBlockDeviceAPI(object):
             logical_disk_size_in_gb='{0:.0f}'.format(size_in_gb))
 
         self._wait_for_async(request.request_id, 5000)
-
+	print 'volume sucessfully added and attached'
+	# now, awkwardly detach this disk from this node since the calle
+	# didn't actually ask us to attach this disk anywhere
+	
         disk = self._azure_client.get_data_disk(self._service_name, self._service_name, self.compute_instance_id(), lun)
-
-        return self._blockdevicevolume_from_azure_volume(disk)
-
+	
+        volume = self._blockdevicevolume_from_azure_volume(disk)
+	
+	self.detach_volume(volume.blockdevice_id)
+	print 'volume sucessfully detached'
+	return volume
     def _disk_label_for_blockdevice_id(self, blockdevice_id):
         # need to mark flocker disks to differentiate from other
         # disks in subscription disk repository
@@ -275,8 +283,6 @@ class AzureStorageBlockDeviceAPI(object):
         return label
 
     def _blockdevice_id_for_disk_label(self, disk_label):
-        print 'getting uuid for:'
-        print disk_label
         return UUID(disk_label.replace('flocker-', ''))
 
     def destroy_volume(self, blockdevice_id):
@@ -323,19 +329,27 @@ class AzureStorageBlockDeviceAPI(object):
         print 'attchinb volume for blockdevice:'
         print blockdevice_id
         target_disk, role_name, lun = self._get_disk_vmname_lun(blockdevice_id)
-
-        if role_name != None or lun != None:
+	print 'role name:'
+	print role_name
+	print 'lun:'
+	print lun
+        if lun != None:
             raise AlreadyAttachedVolume(blockdevice_id)
-
-        request = self.add_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self.service_name,
-                    role_name=role_name,
-                    lun=self._compute_next_remote_lun(role_name),
-                    disk_name=target_disk.name)
+	
+	print 'attaching disk:'
+	print target_disk.name
+	remote_lun = self._compute_next_remote_lun(str(attach_to))
+	print 'to: ' + str(attach_to) + 'at lun:' + str(remote_lun)
         
-        return self._wait_for_async(request.request_id, 5000)
-
+	request = self._azure_client.add_data_disk(
+                    service_name=self._service_name,
+                    deployment_name=self._service_name,
+                    role_name=str(attach_to),
+                    lun=remote_lun,
+                    disk_name=target_disk.name)
+	
+	self._wait_for_async(request.request_id, 5000)
+	return self._blockdevicevolume_from_azure_volume(target_disk, attach_to)
 
 
     def detach_volume(self, blockdevice_id):
@@ -355,15 +369,24 @@ class AzureStorageBlockDeviceAPI(object):
             raise UnattachedVolume(blockdevice_id)
 
         # contrary to function name it doesn't delete by default, just detachs
-        request = self.delete_data_disk(
+        request = self._azure_client.delete_data_disk(
                     service_name=self._service_name,
-                    deployment_name=self.service_name,
+                    deployment_name=self._service_name,
                     role_name=role_name,
                     lun=lun)
-
-        
-        return _wait_for_async(request.request_id, 5000)
-
+	
+        self._wait_for_async(request.request_id, 5000)
+	
+	timeout = 25
+	timeout_count = 0
+	
+	while role_name != None or lun != None:
+	  print 'azure reported disk was detached but its really not'
+	  target_disk, role_name, lun = self._get_disk_vmname_lun(blockdevice_id)
+	  time.sleep(1)
+	  timeout_count += 1
+	
+	
 
     def get_device_path(self, blockdevice_id):
         """
@@ -403,28 +426,39 @@ class AzureStorageBlockDeviceAPI(object):
     def _get_disk_vmname_lun(self, blockdevice_id):
         target_disk = None
         target_lun = None
-        disk_list = self._azure_client.list_disks()
-	
+        role_name = None
+	disk_list = self._azure_client.list_disks()
+		
         for d in disk_list:
-	    
+
 	    if not 'flocker-' in d.label:
 		continue;
-
-	    if self._blockdevice_id_for_disk_label(d.label) == self._disk_label_for_blockdevice_id(blockdevice_id):
-                target_disk = d
+	    print str(self._blockdevice_id_for_disk_label(d.label)) + '==' + str(blockdevice_id)
+	    if str(self._blockdevice_id_for_disk_label(d.label)) == str(blockdevice_id):
+                print 'got target disk'
+		target_disk = d
                 break
 
         if target_disk == None:
             raise UnknownVolume(blockdevice_id)
-
-        vm_info = self._azure_client.get_role(self._service_name, self._service_name, target_disk.attached_to.role_name)
+	
+	
+        vm_info = None
+	
+	if hasattr(target_disk.attached_to, 'role_name'):
+		vm_info = self._azure_client.get_role(self._service_name, self._service_name, target_disk.attached_to.role_name)
         
-        for d in vm_info.data_virtual_hard_disks:
-            if d.name == target_disk.name:
-                target_lun = target_disk.lun
-                break
-
-        return target_disk, target_disk.attach_to.role_name, target_lun
+        	for d in vm_info.data_virtual_hard_disks:
+           		# azure api has two similar but different disk object types, one which
+	   		# names disk fields like 'disk_name' and others will simply just be 'name' 
+	   		if d.disk_name == target_disk.name:
+                		target_lun = d.lun
+                		break
+	
+	
+		role_name = target_disk.attached_to.role_name
+	
+        return target_disk, role_name, target_lun
 
 def azure_driver_from_configuration(service_name, subscription_id, storage_account_name, certificate_data_path, debug=None):
     """
