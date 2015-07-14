@@ -260,18 +260,18 @@ class AzureStorageBlockDeviceAPI(object):
         if size_in_gb % 1 != 0:
             raise UnsupportedVolumeSize(dataset_id)
 
-        print 'creating disk for dataset: '
-        print dataset_id
-        print 'service_name/deployment_name:' + self._service_name
-        print 'role_name' + self.compute_instance_id()
-        print 'lun:' + str(lun)
-        print 'disk_label:' \
-            + self._disk_label_for_blockdevice_id(dataset_id)
-        print 'media_link:' + 'https://' + self._storage_account_name \
-            + '.blob.core.windows.net/flocker/' \
-            + self.compute_instance_id() + '-' \
-            + self._disk_label_for_blockdevice_id(dataset_id)
-        print 'size:' + str(size_in_gb)
+        # print 'creating disk for dataset: '
+        # print dataset_id
+        # print 'service_name/deployment_name:' + self._service_name
+        # print 'role_name' + self.compute_instance_id()
+        # print 'lun:' + str(lun)
+        # print 'disk_label:' \
+        #     + self._disk_label_for_blockdevice_id(dataset_id)
+        # print 'media_link:' + 'https://' + self._storage_account_name \
+        #     + '.blob.core.windows.net/flocker/' \
+        #     + self.compute_instance_id() + '-' \
+        #     + self._disk_label_for_blockdevice_id(dataset_id)
+        # print 'size:' + str(size_in_gb)
 
         # azure api only allows us to create a data disk when we are
         # attaching. so to work-around we have to attach to this node
@@ -291,7 +291,6 @@ class AzureStorageBlockDeviceAPI(object):
             )
 
         self._wait_for_async(request.request_id, 5000)
-        print 'volume sucessfully added and attached'
 
         # now, awkwardly detach this disk from this node since the calle
         # didn't actually ask us to attach this disk anywhere
@@ -302,7 +301,6 @@ class AzureStorageBlockDeviceAPI(object):
         volume = self._blockdevicevolume_from_azure_volume(disk)
 
         self.detach_volume(volume.blockdevice_id)
-        print 'volume sucessfully detached'
         return volume
 
     def _disk_label_for_blockdevice_id(self, blockdevice_id):
@@ -469,11 +467,10 @@ class AzureStorageBlockDeviceAPI(object):
 
             if not 'flocker-' in d.label:
                 continue
-            print str(self._blockdevice_id_for_disk_label(d.label)) \
-                + '==' + str(blockdevice_id)
+
             if str(self._blockdevice_id_for_disk_label(d.label)) \
                 == str(blockdevice_id):
-                print 'got target disk'
+
                 target_disk = d
                 break
 
