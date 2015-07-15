@@ -2,7 +2,7 @@
 # See LICENSE file for details.
 
 """
-EMC Test helpers for ``flocker.node.agents``.
+Azure Test helpers for ``flocker.node.agents``.
 """
 
 import os
@@ -41,7 +41,9 @@ def azure_driver_from_yaml():
             service_name=azure_config['service_name'],
             subscription_id=azure_config['subscription_id'],
             storage_account_name=azure_config['storage_account_name'],
-            certificate_data_path=azure_config['management_certificate_path']
+            certificate_data_path=azure_config['management_certificate_path'],
+            storage_account_key=azure_config['storage_account_key'],
+            disk_container_name=azure_config['disk_container_name']
         )
 
 # def tidy_scaleio_client_for_test(test_case):
