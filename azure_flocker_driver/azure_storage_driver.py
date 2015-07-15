@@ -1,5 +1,7 @@
 import time
+import datetime
 import sys
+import uuid
 from uuid import UUID
 import logging
 import requests
@@ -13,6 +15,7 @@ from bitmath import Byte, GiB, MiB, KiB
 
 from azure import WindowsAzureMissingResourceError
 from azure.servicemanagement import ServiceManagementService
+from azure.storage import BlobService
 
 from eliot import Message, Logger
 from zope.interface import implementer, Interface
@@ -147,10 +150,10 @@ class AzureStorageBlockDeviceAPI(object):
     def __init__(
         self,
         azure_client,
+	azure_storage_client,
         service_name,
         deployment_name,
         storage_account_name,
-        stoarge_account_key,
         disk_container_name
         ):
         """
@@ -166,8 +169,8 @@ class AzureStorageBlockDeviceAPI(object):
         self._instance_id = self.compute_instance_id()
         self._azure_service_client = azure_client
         self._service_name = service_name
-        self._azure_storage_client = storage_account_name
-        self._stoarge_account_key = stoarge_account_key
+        self._azure_storage_client = azure_storage_client 
+        self._storage_account_name = storage_account_name
         self._disk_container_name = disk_container_name
 
     def allocation_unit(self):
@@ -208,25 +211,15 @@ class AzureStorageBlockDeviceAPI(object):
 
         return int(GiB(size).to_Byte().value)
 
-    def _blockdevicevolume_from_azure_volume(self, disk,
-            attached_to_name=None):
+    def _blockdevicevolume_from_azure_volume(self, label, size,
+            attached_to_name):
 
-        label = None
 
-        if disk.__class__.__name__ == 'DataVirtualHardDisk':
 
-            # this is returned by a callt o get_data_disk
-
-            label = disk.disk_label
-        else:
-            label = disk.label
-            if disk.attached_to != None:
-                attached_to_name = disk.attached_to.role_name
-
-                return BlockDeviceVolume(blockdevice_id=unicode(self._blockdevice_id_for_disk_label(label)),
-                        size=self._gibytes_to_bytes(disk.logical_disk_size_in_gb),
-                        attached_to=attached_to_name,
-                        dataset_id=self._blockdevice_id_for_disk_label(label))  # disk labels are formatted as flocker-<data_set_id>
+            return BlockDeviceVolume(blockdevice_id=unicode(label),
+                     size=int(size),
+                     attached_to=attached_to_name,
+                     dataset_id=self._blockdevice_id_for_disk_label(label))  # disk labels are formatted as flocker-<data_set_id>
 
     def _compute_next_remote_lun(self, role_name):
         vm_info = self._azure_service_client.get_role(self._service_name,
@@ -282,7 +275,7 @@ class AzureStorageBlockDeviceAPI(object):
         # attaching. so to work-around we have to attach to this node
         # and then detach
 
-        self._azure_storage_client.put_blob(container_name=_disk_container_name,
+        self._azure_storage_client.put_blob(container_name=self._disk_container_name,
             blob_name=self._disk_label_for_blockdevice_id(dataset_id),
             blob=None,
             x_ms_blob_type='PageBlob',
@@ -291,13 +284,14 @@ class AzureStorageBlockDeviceAPI(object):
 
         vhd_footer = self._generate_vhd_footer(size)
 
-        self._azure_storage_service.put_page(container_name=_disk_container_name,
+        self._azure_storage_client.put_page(container_name=self._disk_container_name,
             blob_name=self._disk_label_for_blockdevice_id(dataset_id),
             page=vhd_footer,
             x_ms_page_write='update',
             x_ms_range='bytes='+str((size - 512))+'-'+str(size-1))
-
-        return BlockDeviceVolume(blockdevice_id=unicode(self._blockdevice_id_for_disk_label(dataset_id)),
+	
+	label = self._disk_label_for_blockdevice_id(str(dataset_id))
+        return BlockDeviceVolume(blockdevice_id=unicode(label),
                         size=size,
                         attached_to=None,
                         dataset_id=self._blockdevice_id_for_disk_label(label))
@@ -431,20 +425,22 @@ class AzureStorageBlockDeviceAPI(object):
             raise AlreadyAttachedVolume(blockdevice_id)
 
         unregistered_disk = False
+	disk_size = 0
         if target_disk == None:
 
             try:
-                self._azure_storage_client.get_blob_metadata(
-                    container_name=disk_container_name,
-                    blob_name=self._disk_label_for_blockdevice_id(blockdevice_id))
+                props = self._azure_storage_client.get_blob_properties(
+                    container_name=self._disk_container_name,
+                    blob_name=blockdevice_id)
                 unregistered_disk = True
+		disk_size = props['content-length']
             except WindowsAzureMissingResourceError:
                 raise UnknownVolume(blockdevice_id)
 
         remote_lun = self._compute_next_remote_lun(str(attach_to))
         print 'to: ' + str(attach_to) + 'at lun:' + str(remote_lun)
 
-        if unregistered_disk:
+        if not unregistered_disk:
             request = \
                 self._azure_service_client.add_data_disk(service_name=self._service_name,
                     deployment_name=self._service_name,
@@ -455,11 +451,19 @@ class AzureStorageBlockDeviceAPI(object):
                 self._azure_service_client.add_data_disk(service_name=self._service_name,
                     deployment_name=self._service_name,
                     role_name=str(attach_to), lun=remote_lun,
-                    source_media_link='https://'+self._storage_account_name + '.blob.core.windows.net/' + self._disk_container_name + '/' + self._disk_label_for_blockdevice_id(blockdevice_id))
+		    disk_label = blockdevice_id,
+                    source_media_link='https://'+self._storage_account_name + '.blob.core.windows.net/' + self._disk_container_name + '/' + blockdevice_id)
 
         self._wait_for_async(request.request_id, 5000)
-        return self._blockdevicevolume_from_azure_volume(target_disk,
-                attach_to)
+	
+	if target_disk == None:
+        	return self._blockdevicevolume_from_azure_volume(blockdevice_id,
+			disk_size,
+                	attach_to)
+	else:
+		return self._blockdevicevollume_from_azure_volume(target_disz.label,
+			target_disk.size,
+			attach_to)
 
     def detach_volume(self, blockdevice_id):
         """
@@ -554,7 +558,7 @@ class AzureStorageBlockDeviceAPI(object):
                 break
 
         if target_disk == None:
-            raise UnknownVolume(blockdevice_id)
+            return None, None, None 
 
         vm_info = None
 
@@ -618,7 +622,7 @@ def azure_driver_from_configuration(
                       + ' does not exist')
     sms = ServiceManagementService(subscription_id,
                                    certificate_data_path)
-    storage_client = StorageService(storage_account_name, 
+    storage_client = BlobService(storage_account_name, 
                                     storage_account_key)
     return AzureStorageBlockDeviceAPI(sms, storage_client, service_name, service_name,
-            storage_account_name)
+            storage_account_name, disk_container_name)
