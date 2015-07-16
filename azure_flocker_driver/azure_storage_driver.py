@@ -530,14 +530,37 @@ class AzureStorageBlockDeviceAPI(object):
 
         disks = self._azure_service_client.list_disks()
         disk_list = []
+        blobs = self._azure_storage_client.list_blobs(self._disk_container_name, prefix='flocker-')
+        all_blobs = []
+        for b in blobs:
+            # todo - this could be big!
+             all_blobs.append(b)
+ 
         for d in disks:
-
+ 
             # flocker disk labels are formatted as 'flocker-DATASET_ID_GUID'
-
+ 
             if not 'flocker-' in d.label:
-                continue
-            disk_list.append(self._blockdevicevolume_from_azure_volume(d))
+                 continue
+ 
+            role_name = None
+ 
+            if d.attached_to != None and d.attached_to.role_name != None:
+                 role_name = d.attached_to.role_name
 
+            disk_list.append(self._blockdevicevolume_from_azure_volume(d.label, self._gibytes_to_bytes(d.logical_disk_size_in_gb), role_name)) 
+            for i in range(0, len(all_blobs)):
+                if d.label == all_blobs[i].name:
+                    # filter blobs that are already registered
+                    del all_blobs[i]
+                    break
+ 
+ 
+        for b in all_blobs:
+            # include unregistered 'disk' blobs
+            disk_list.append(self._blockdevicevolume_from_azure_volume(b.name, b.properties.content_length, None))
+ 
+ 
         return disk_list
 
     def _get_disk_vmname_lun(self, blockdevice_id):
