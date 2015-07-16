@@ -16,16 +16,47 @@ from twisted.python.components import proxyForInterface
 
 from .azure_storage_driver import azure_driver_from_configuration
 
-def azure_driver_from_yaml():
+from azure.servicemanagement import ServiceManagementService
+from azure.storage import BlobService
+
+azure_config = None
+config_file_path = os.environ.get('AZURE_CONFIG_FILE')
+
+if config_file_path is not None:
+    config_file = open(config_file_path)
+    config = yaml.load(config_file.read())
+    azure_config = config['azure_settings']
+
+# Cleans up created/attached disks after each test
+def clean_up():
+    sms = ServiceManagementService(azure_config['subscription_id'],azure_config['management_certificate_path'])
+    blob_service = BlobService(azure_config['storage_account_name'], azure_config['storage_account_key'])
+
+    deployment = sms.get_deployment_by_name(azure_config['service_name'], azure_config['service_name'])
+
+    for r in deployment.role_instance_list:
+        vm_info = sms.get_role(azure_config['service_name'], azure_config['service_name'], r.role_name)
+
+        for d in vm_info.data_virtual_hard_disks:
+            if 'flocker-' in d.disk_label:
+                request = sms.delete_data_disk(service_name=azure_config['service_name'],
+                    deployment_name=azure_config['service_name'],
+                    role_name=r.role_name,
+                    lun=d.lun,
+                    delete_vhd=True)
+                wait_for_async(request.request_id, 5000)
+
+
+
+
+def azure_test_driver_from_yaml(test_case):
     """
     Create a ``azure.scaleio.ScaleIO`` using credentials from a
     test_azure_storage.yaml (TODO move these to config file)
     :returns: An instance of ``scaleiopy.scaleio.ScaleIO`` authenticated
     """
-    config_file_path = os.environ.get('AZURE_CONFIG_FILE')
-    if config_file_path is not None:
-        config_file = open(config_file_path)
-    else:
+    
+    if azure_config == None:
         raise SkipTest(
             'Supply the path to a test config file '
             'using the AZURE_CONFIG_FILE environment variable. '
@@ -34,9 +65,8 @@ def azure_driver_from_yaml():
             'for details of the expected format.'
         )
 
-    config = yaml.load(config_file.read())
-    azure_config = config['azure_settings']
-    
+    test_case.addCleanup(clean_up)
+
     return azure_driver_from_configuration(
             service_name=azure_config['service_name'],
             subscription_id=azure_config['subscription_id'],

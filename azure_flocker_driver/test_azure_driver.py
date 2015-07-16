@@ -26,12 +26,14 @@ from flocker.node.agents.test.test_blockdevice import (
 )
 
 
-def azureblockdeviceasyncapi_for_test():
+def azureblockdeviceasyncapi_for_test(test_case):
     """
     Create a ``EMCScaleIOBlockDeviceAPI`` instance for use in tests.
     :returns: A ``EMCCinderBlockDeviceAPI`` instance
     """
-    return azure_driver_from_yaml()
+
+
+    return azure_test_driver_from_yaml(test_case)
 
 def azure_factory():
     return make_iblockdeviceasyncapi_tests(azureblockdeviceasyncapi_for_test)
@@ -72,7 +74,7 @@ def azure_factory():
 class AzureStorageBlockDeviceAPIInterfaceTests(
     make_iblockdeviceapi_tests(
         blockdevice_api_factory=(
-                lambda test_case: azureblockdeviceasyncapi_for_test()
+                lambda test_case: azureblockdeviceasyncapi_for_test(test_case)
             ),
         minimum_allocatable_size=int(GiB(1).to_Byte().value),
         device_allocation_unit=int(GiB(1).to_Byte().value),
