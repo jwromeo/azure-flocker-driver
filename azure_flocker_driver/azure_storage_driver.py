@@ -380,12 +380,26 @@ class AzureStorageBlockDeviceAPI(object):
             exist.
         :return: ``None``
         """
-
+	print 'destorying block device:'
+	print blockdevice_id
         (target_disk, role_name, lun) = \
             self._get_disk_vmname_lun(blockdevice_id)
-
+        print 'target_disk:'
+	print target_disk
         if target_disk == None:
-            return UnknownVolume(blockdevice_id)
+            blobs = self._azure_storage_client.list_blobs(self._disk_container_name, prefix='flocker-')
+	    print 'destorying blob!'       	    
+	    for b in blobs:
+		if b.name == str(blockdevice_id):
+		    print 'deleting!'
+		    print b.name
+		    self._azure_storage_client.delete_blob(container_name=self._disk_container_name,
+			blob_name=b.name,
+			x_ms_delete_snapshots='include')
+		    return
+	   
+
+	    raise UnknownVolume(blockdevice_id)
 
         if target_disk.attached_to != None:
             request = \
@@ -527,7 +541,7 @@ class AzureStorageBlockDeviceAPI(object):
         List all the block devices available via the back end API.
         :returns: A ``list`` of ``BlockDeviceVolume``s.
         """
-
+	media_url_prefix = 'https://' + self._storage_account_name + '.blob.core.windows.net/' + self._disk_container_name
         disks = self._azure_service_client.list_disks()
         disk_list = []
         blobs = self._azure_storage_client.list_blobs(self._disk_container_name, prefix='flocker-')
@@ -537,7 +551,10 @@ class AzureStorageBlockDeviceAPI(object):
              all_blobs.append(b)
  
         for d in disks:
- 
+	    
+	    if not media_url_prefix in d.media_link:
+		continue
+
             # flocker disk labels are formatted as 'flocker-DATASET_ID_GUID'
  
             if not 'flocker-' in d.label:
@@ -573,10 +590,7 @@ class AzureStorageBlockDeviceAPI(object):
 
             if not 'flocker-' in d.label:
                 continue
-
-            if str(self._blockdevice_id_for_disk_label(d.label)) \
-                == str(blockdevice_id):
-
+            if d.label == str(blockdevice_id):
                 target_disk = d
                 break
 
