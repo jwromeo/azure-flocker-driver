@@ -47,7 +47,7 @@ class Lun(object):
     @staticmethod
     def rescan_scsi():
 	with open(os.devnull, 'w') as shutup:
-            subprocess.call(['sudo', 'fdisk', '-l'], stdout=shutup,
+            subprocess.call(['fdisk', '-l'], stdout=shutup,
                             stderr=shutup)
     @staticmethod
     def compute_next_lun():
@@ -138,7 +138,7 @@ class UnsupportedVolumeSize(Exception):
         Exception.__init__(self, dataset_id)
         self.dataset_id = dataset_id
 
-
+@implementer(IBlockDeviceAPI)
 class AzureStorageBlockDeviceAPI(object):
 
     """
@@ -402,15 +402,20 @@ class AzureStorageBlockDeviceAPI(object):
 
 	    raise UnknownVolume(blockdevice_id)
 
-        if target_disk.attached_to != None:
+        if lun != None:
             request = \
-                self.delete_data_disk(service_name=self._service_name,
-                    deployment_name=self.service_name,
-                    role_name=role_name, lun=lun, delete_vhd=True)
+                self._azure_service_client.delete_data_disk(service_name=self._service_name,
+                    deployment_name=self._service_name,
+                    role_name=target_disk.name, lun=lun, delete_vhd=True)
         else:
-            request = self._azure_service_client.delete_disk(target_disk.name,
+	    if target_disk.__class__.__name__ == 'Blob':
+		# unregistered disk
+		self._azure_storage_client.delete_blob(self._disk_container_name,
+			target_disk.name)
+	    else:
+            	request = self._azure_service_client.delete_disk(target_disk.name,
                     True)
-            self._wait_for_async(request.request_id, 5000)
+            	self._wait_for_async(request.request_id, 5000)
 
     def attach_volume(self, blockdevice_id, attach_to):
         """
@@ -448,15 +453,14 @@ class AzureStorageBlockDeviceAPI(object):
                      role_name=str(attach_to), lun=remote_lun,
                      disk_label = blockdevice_id,
                      source_media_link='https://'+self._storage_account_name + '.blob.core.windows.net/' + self._disk_container_name + '/' + blockdevice_id)
-        elif target_disk.__classname__.name == 'DataVirtualHardDisk':
+        else:
 	    print 'to: ' + str(attach_to) + 'at lun:' + str(remote_lun)
 	
             request = \
                 self._azure_service_client.add_data_disk(service_name=self._service_name,
                     deployment_name=self._service_name,
                     role_name=str(attach_to), lun=remote_lun,
-		    disk_label = blockdevice_id,
-                    source_media_link='https://'+self._storage_account_name + '.blob.core.windows.net/' + self._disk_container_name + '/' + blockdevice_id)
+		    disk_name = target_disk.name)
 
         self._wait_for_async(request.request_id, 5000)
 	
@@ -467,7 +471,7 @@ class AzureStorageBlockDeviceAPI(object):
                 self._get_disk_vmname_lun(blockdevice_id)
             time.sleep(1)
             timeout_count += 1
-        print 'disk attached'	
+        print 'disk attached'
 	if target_disk.__class__.__name__  == 'Blob':
         	return self._blockdevicevolume_from_azure_volume(blockdevice_id,
 			disk_size,
@@ -624,6 +628,8 @@ class AzureStorageBlockDeviceAPI(object):
         return (target_disk, role_name, target_lun)
 
     def detach_delete_all_disks(self):
+	print '========'
+	print 'CLEAN UP'
         deployment = self._azure_service_client.get_deployment_by_name(self._service_name, self._service_name)
 
         for r in deployment.role_instance_list:
@@ -660,10 +666,11 @@ class AzureStorageBlockDeviceAPI(object):
 		print 'name:' + str(d.name)
 		print 'label:' + str(d.label)
 		print 'link:' + str(d.media_link)
-
 	    	self._azure_service_client.delete_disk(d.name, delete_vhd=True)
-		
-		
+	# all the blobs left over should be unregistered disks
+	for b in self._azure_storage_client.list_blobs(self._disk_container_name, 'flocker-'):
+		print 'cleaning unregistered disk ' + str(b.name)
+		self._azure_storage_client.delete_blob(self._disk_container_name, b.name);
 
 def azure_driver_from_configuration(
     service_name,
