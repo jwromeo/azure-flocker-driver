@@ -19,7 +19,7 @@ from flocker.testtools import skip_except
 from twisted.internet import reactor
 
 from azure_storage_driver import azure_driver_from_configuration
-from .testtools_azure_storage_driver import azure_driver_from_yaml
+from .testtools_azure_storage_driver import azure_test_driver_from_yaml
 
 from flocker.node.agents.test.test_blockdevice import (
     make_iblockdeviceasyncapi_tests, make_iblockdeviceapi_tests

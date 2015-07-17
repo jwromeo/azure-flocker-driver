@@ -7,6 +7,8 @@ Azure Test helpers for ``flocker.node.agents``.
 
 import os
 import yaml
+import time
+import sys
 
 from zope.interface.verify import verifyObject
 from zope.interface import implementer
@@ -16,9 +18,6 @@ from twisted.python.components import proxyForInterface
 
 from .azure_storage_driver import azure_driver_from_configuration
 
-from azure.servicemanagement import ServiceManagementService
-from azure.storage import BlobService
-
 azure_config = None
 config_file_path = os.environ.get('AZURE_CONFIG_FILE')
 
@@ -26,27 +25,6 @@ if config_file_path is not None:
     config_file = open(config_file_path)
     config = yaml.load(config_file.read())
     azure_config = config['azure_settings']
-
-# Cleans up created/attached disks after each test
-def clean_up():
-    sms = ServiceManagementService(azure_config['subscription_id'],azure_config['management_certificate_path'])
-    blob_service = BlobService(azure_config['storage_account_name'], azure_config['storage_account_key'])
-
-    deployment = sms.get_deployment_by_name(azure_config['service_name'], azure_config['service_name'])
-
-    for r in deployment.role_instance_list:
-        vm_info = sms.get_role(azure_config['service_name'], azure_config['service_name'], r.role_name)
-
-        for d in vm_info.data_virtual_hard_disks:
-            if 'flocker-' in d.disk_label:
-                request = sms.delete_data_disk(service_name=azure_config['service_name'],
-                    deployment_name=azure_config['service_name'],
-                    role_name=r.role_name,
-                    lun=d.lun,
-                    delete_vhd=True)
-                wait_for_async(request.request_id, 5000)
-
-
 
 
 def azure_test_driver_from_yaml(test_case):
@@ -65,9 +43,7 @@ def azure_test_driver_from_yaml(test_case):
             'for details of the expected format.'
         )
 
-    test_case.addCleanup(clean_up)
-
-    return azure_driver_from_configuration(
+    driver = azure_driver_from_configuration(
             service_name=azure_config['service_name'],
             subscription_id=azure_config['subscription_id'],
             storage_account_name=azure_config['storage_account_name'],
@@ -76,6 +52,8 @@ def azure_test_driver_from_yaml(test_case):
             disk_container_name=azure_config['disk_container_name']
         )
 
+    test_case.addCleanup(driver.detach_delete_all_disks)
+    return driver;
 # def tidy_scaleio_client_for_test(test_case):
 #     """
 #     Return a ``scaleiopy.scaleio.ScaleIO`` whose ScaleIO API is a
