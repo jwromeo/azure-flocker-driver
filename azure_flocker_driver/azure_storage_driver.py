@@ -495,6 +495,9 @@ class AzureStorageBlockDeviceAPI(object):
 
         (target_disk, role_name, lun) = \
             self._get_disk_vmname_lun(blockdevice_id)
+	
+	if target_disk == None:
+	    raise UnknownVolume(blockdevice_id)
 
         if lun == None:
             raise UnattachedVolume(blockdevice_id)
