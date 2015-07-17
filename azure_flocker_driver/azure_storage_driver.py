@@ -644,7 +644,9 @@ class AzureStorageBlockDeviceAPI(object):
 		deleted_disk_names.append(d.disk_name)
 		timeout_count = 0
         	print 'waiting for azure to report disk as detached...'
-        	while role_name != None or lun != None:
+        	role_name = r.role_name
+		lun = d.lun
+		while role_name != None or lun != None:
             	    (target_disk, role_name, lun) = \
                     self._get_disk_vmname_lun(d.disk_label)
             	    time.sleep(1)
