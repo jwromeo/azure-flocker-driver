@@ -9,7 +9,7 @@ with codecs.open('DESCRIPTION.rst', encoding='utf-8') as f:
 setup(
     name='azure_flocker_driver',
     version='1.0',
-    description='EMC ScaleIO Backend Plugin for ClusterHQ/Flocker ',
+    description='EMC Azure Backend Plugin for ClusterHQ/Flocker ',
     long_description=long_description,
     author='Steven Edouard',
     author_email='sedouard@microsoft.com',
@@ -32,7 +32,7 @@ setup(
 
     keywords='backend, plugin, flocker, docker, python',
     packages=find_packages(exclude=['test*']),
-    install_requires = ['scaleio-py'],
+    install_requires = ['Azure-py'],
     data_files=[('/etc/flocker/', ['example_azure_agent.yml']),
                 ('/etc/flocker/', ['azure_storage_test.yml'])]
 )

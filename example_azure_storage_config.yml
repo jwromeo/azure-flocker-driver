@@ -5,4 +5,5 @@ azure_settings:
   storage_account_name: "storage-account-name"
   storage_account_key: "storage_account_key"
   disk_container_name: "my_disks_container"
+  async_timeout: 5000
   debug: "true"

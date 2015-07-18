@@ -29,9 +29,9 @@ if config_file_path is not None:
 
 def azure_test_driver_from_yaml(test_case):
     """
-    Create a ``azure.scaleio.ScaleIO`` using credentials from a
+    Create a ``azure.Azure.Azure`` using credentials from a
     test_azure_storage.yaml (TODO move these to config file)
-    :returns: An instance of ``scaleiopy.scaleio.ScaleIO`` authenticated
+    :returns: An instance of ``Azurepy.Azure.Azure`` authenticated
     """
     
     if azure_config == None:
@@ -54,13 +54,13 @@ def azure_test_driver_from_yaml(test_case):
 
     test_case.addCleanup(driver.detach_delete_all_disks)
     return driver;
-# def tidy_scaleio_client_for_test(test_case):
+# def tidy_Azure_client_for_test(test_case):
 #     """
-#     Return a ``scaleiopy.scaleio.ScaleIO`` whose ScaleIO API is a
-#     wrapped by a ``TidyScaleIOVolumeManager`` and register a ``test_case``
+#     Return a ``Azurepy.Azure.Azure`` whose Azure API is a
+#     wrapped by a ``TidyAzureVolumeManager`` and register a ``test_case``
 #     cleanup callback to remove any volumes that are created during each test.
 #     """
-#     client, pd, sp = scaleio_client_from_environment()
-#     client = TidyScaleIOVolumeManager(client)
+#     client, pd, sp = Azure_client_from_environment()
+#     client = TidyAzureVolumeManager(client)
 #     test_case.addCleanup(client._cleanup)
 #     return client, pd, sp

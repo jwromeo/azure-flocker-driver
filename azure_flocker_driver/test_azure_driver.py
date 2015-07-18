@@ -3,8 +3,8 @@
 
 """
 Functional tests for
-``flocker.node.agents.blockdevice.EMCScaleIOBlockDeviceAPI``
-using a real Scaleio cluster.
+``flocker.node.agents.blockdevice.EMCAzureBlockDeviceAPI``
+using a real Azure cluster.
 Ideally emc drivers should be seperate like cinder driver,
 we may change thay in the future.
 """
@@ -28,7 +28,7 @@ from flocker.node.agents.test.test_blockdevice import (
 
 def azureblockdeviceasyncapi_for_test(test_case):
     """
-    Create a ``EMCScaleIOBlockDeviceAPI`` instance for use in tests.
+    Create a ``EMCAzureBlockDeviceAPI`` instance for use in tests.
     :returns: A ``EMCCinderBlockDeviceAPI`` instance
     """
 

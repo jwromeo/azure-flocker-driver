@@ -154,7 +154,7 @@ class AzureStorageBlockDeviceAPI(object):
         :param String service_name: The name of the service. For SMS api deployments
         this is the cloud service name
         :param 
-            names of ScaleIO volumes to identify cluster
+            names of Azure volumes to identify cluster
         :returns: A ``BlockDeviceVolume``.
         """
 
@@ -175,7 +175,7 @@ class AzureStorageBlockDeviceAPI(object):
 
     def compute_instance_id(self):
         """
-        ScaleIO Stored a UUID in the SDC kernel module.
+        Azure Stored a UUID in the SDC kernel module.
         """
 
         # Node host names should be unique within a vnet
@@ -698,14 +698,14 @@ def azure_driver_from_configuration(
     """
     Returns Flocker Azure BlockDeviceAPI from plugin config yml.
         :param uuid cluster_id: The UUID of the cluster
-        :param string username: The username for ScaleIO Driver,
+        :param string username: The username for Azure Driver,
             this will be used to login and enable requests to
-            be made to the underlying ScaleIO BlockDeviceAPI
-        :param string password: The username for ScaleIO Driver,
+            be made to the underlying Azure BlockDeviceAPI
+        :param string password: The username for Azure Driver,
             this will be used to login and enable requests to be
-            made to the underlying ScaleIO BlockDeviceAPI
-        :param unicode mdm_ip: The Main MDM IP address. ScaleIO
-            Driver will communicate with the ScaleIO Gateway
+            made to the underlying Azure BlockDeviceAPI
+        :param unicode mdm_ip: The Main MDM IP address. Azure
+            Driver will communicate with the Azure Gateway
             Node to issue REST API commands.
         :param integer port: MDM Gateway The port
         :param string protection_domain: The protection domain
