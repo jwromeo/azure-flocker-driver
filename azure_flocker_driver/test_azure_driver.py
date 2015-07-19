@@ -9,16 +9,12 @@ Ideally emc drivers should be seperate like cinder driver,
 we may change thay in the future.
 """
 
-from uuid import uuid4, UUID
+from uuid import uuid4
 
-from bitmath import Byte, GiB
-
-from twisted.trial.unittest import SynchronousTestCase
+from bitmath import GiB
 
 from flocker.testtools import skip_except
-from twisted.internet import reactor
 
-from azure_storage_driver import azure_driver_from_configuration
 from .testtools_azure_storage_driver import azure_test_driver_from_yaml
 
 from flocker.node.agents.test.test_blockdevice import (
@@ -31,12 +27,13 @@ def azureblockdeviceasyncapi_for_test(test_case):
     Create a ``EMCAzureBlockDeviceAPI`` instance for use in tests.
     :returns: A ``EMCCinderBlockDeviceAPI`` instance
     """
-
-
     return azure_test_driver_from_yaml(test_case)
 
+
 def azure_factory():
+
     return make_iblockdeviceasyncapi_tests(azureblockdeviceasyncapi_for_test)
+
 
 @skip_except(
     supported_tests=[
@@ -70,12 +67,12 @@ def azure_factory():
         'test_compute_instance_id_unicode'
     ]
 )
-
 class AzureStorageBlockDeviceAPIInterfaceTests(
+
     make_iblockdeviceapi_tests(
         blockdevice_api_factory=(
-                lambda test_case: azureblockdeviceasyncapi_for_test(test_case)
-            ),
+            lambda test_case: azureblockdeviceasyncapi_for_test(test_case)
+        ),
         minimum_allocatable_size=int(GiB(1).to_Byte().value),
         device_allocation_unit=int(GiB(1).to_Byte().value),
         unknown_blockdevice_id_factory=lambda test: unicode(uuid4())

@@ -1,0 +1,7 @@
+language: python
+python:
+  - "2.7"
+# command to install dependencies
+install: "sudo pip install -r requirements.txt"
+# command to run tests
+script: "sudo -H tox --develop && cat /home/travis/build/sedouard/azure-flocker-driver/.tox/lint/log/lint-1.log"
