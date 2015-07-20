@@ -1,18 +1,16 @@
 import time
-import datetime
-import uuid
 from uuid import UUID
 import socket
-import re
 import os
-import subprocess
 
 from bitmath import Byte, GiB
 from azure.servicemanagement import ServiceManagementService
 from azure.storage import BlobService
 from eliot import Message, Logger
 from zope.interface import implementer
-from twisted.python.filepath import FilePath
+
+from .utils import Lun
+from .utils import Vhd
 
 from flocker.node.agents.blockdevice import AlreadyAttachedVolume, \
     IBlockDeviceAPI, BlockDeviceVolume, UnknownVolume, UnattachedVolume
@@ -28,80 +26,10 @@ _logger = Logger()
 ALLOCATION_GRANULARITY = 1
 
 
-class Lun(object):
-
-    device_path = ''
-    lun = ''
-
-    def __init__():
-        return
-
-    @staticmethod
-    def rescan_scsi():
-        with open(os.devnull, 'w') as shutup:
-            subprocess.call(['fdisk', '-l'], stdout=shutup, stderr=shutup)
-
-    @staticmethod
-    def compute_next_lun():
-        """
-        Computes the next available LUN on this node (excluding LUN=0)
-        return int: The available LUN
-        """
-        # force the latest scsci info
-        Lun.rescan_scsi()
-        disk_info_string = subprocess.check_output('lsscsi')
-        parts = disk_info_string.strip('\n').split('\n')
-
-        lun = 0
-        count = 0
-        for i in range(0, len(parts)):
-
-            line = parts[i]
-            segments = re.split(':|]|\[', line)
-
-            if int(segments[1]) != 5:
-                continue
-
-            next_lun = int(segments[4])
-
-            if next_lun - count >= 1:
-                lun = next_lun - 1
-                break
-
-            if i == len(parts) - 1:
-                lun = next_lun + 1
-                break
-            count += 1
-            lun = next_lun
-
-        return lun
-
-    # Returns a string representing the block device path based
-    # on a provided lun slot
-
-    @staticmethod
-    def get_device_path_for_lun(lun):
-        """
-        Returns a FilePath representing the path of the device
-        with the sepcified LUN. TODO: Is it valid to predict the
-        path based on the LUN?
-        return FilePath: The FilePath representing the attached disk
-        """
-        Lun.rescan_scsi()
-        if lun > 31:
-            raise Exception('valid lun parameter is 0 - 31, inclusive')
-        base = '/dev/sd'
-
-        # luns go 0-31
-        ascii_base = ord('c')
-
-        return FilePath(base + chr(ascii_base + lun), False)
-
-
 class UnsupportedVolumeSize(Exception):
     """
     The volume size is not supported
-    Needs to be 8GB allocation granularity
+    Needs to be 1GB allocation granularity
     :param unicode dataset_id: The volume dataset_id
     """
 
@@ -184,7 +112,7 @@ class AzureStorageBlockDeviceAPI(object):
 
         # for disk to be a valid vhd it requires a vhd footer
         # on the last 512 bytes
-        vhd_footer = self._generate_vhd_footer(size)
+        vhd_footer = Vhd.generate_vhd_footer(size)
 
         self._azure_storage_client.put_page(
             container_name=self._disk_container_name,
@@ -216,9 +144,7 @@ class AzureStorageBlockDeviceAPI(object):
             self._get_disk_vmname_lun(blockdevice_id)
 
         if target_disk is None:
-            blobs = self._azure_storage_client.list_blobs(
-                self._disk_container_name,
-                prefix='flocker-')
+            blobs = self._get_flocker_blobs()
 
             for b in blobs:
                 if b.name == str(blockdevice_id):
@@ -272,38 +198,15 @@ class AzureStorageBlockDeviceAPI(object):
         if lun is not None:
             raise AlreadyAttachedVolume(blockdevice_id)
 
-        request = None
-        disk_size = 0
-        remote_lun = self._compute_next_remote_lun(str(attach_to))
+        timeout_count = 0
 
         Message.new(Info='Attempting to attach ' + str(blockdevice_id)
                     + ' to ' + str(attach_to)).write(_logger)
-        if target_disk.__class__.__name__ == 'Blob':
-            disk_size = target_disk.properties.content_length
-            request = \
-                self._azure_service_client.add_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self._service_name,
-                    role_name=str(attach_to), lun=remote_lun,
-                    disk_label=blockdevice_id,
-                    source_media_link='https://' + self._storage_account_name
-                    + '.blob.core.windows.net/' + self._disk_container_name
-                    + '/' + blockdevice_id)
-        else:
 
-            request = \
-                self._azure_service_client.add_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self._service_name,
-                    role_name=str(attach_to), lun=remote_lun,
-                    disk_name=target_disk.name)
-
-        self._wait_for_async(request.request_id, 5000)
+        disk_size = self._attach_disk(blockdevice_id, target_disk, attach_to)
 
         Message.new(Info='waiting for azure to report '
                     + ' disk as attached...').write(_logger)
-
-        timeout_count = 0
 
         while lun is None:
             (target_disk, role_name, lun) = \
@@ -315,15 +218,9 @@ class AzureStorageBlockDeviceAPI(object):
                 break
         Message.new(Info='disk attached').write(_logger)
 
-        if target_disk.__class__.__name__ == 'Blob':
-            return self._blockdevicevolume_from_azure_volume(blockdevice_id,
-                                                             disk_size,
-                                                             attach_to)
-        else:
-            return self._blockdevicevolume_from_azure_volume(
-                target_disk.label,
-                self._gibytes_to_bytes(target_disk.logical_disk_size_in_gb),
-                attach_to)
+        return self._blockdevicevolume_from_azure_volume(blockdevice_id,
+                                                         disk_size,
+                                                         attach_to)
 
     def detach_volume(self, blockdevice_id):
         """
@@ -403,14 +300,7 @@ class AzureStorageBlockDeviceAPI(object):
             + '.blob.core.windows.net/' + self._disk_container_name
         disks = self._azure_service_client.list_disks()
         disk_list = []
-        blobs = self._azure_storage_client.list_blobs(
-            self._disk_container_name,
-            prefix='flocker-')
-        all_blobs = []
-        for b in blobs:
-            # todo - this could be big!
-            all_blobs.append(b)
-
+        all_blobs = self._get_flocker_blobs()
         for d in disks:
 
             if media_url_prefix not in d.media_link or \
@@ -427,6 +317,7 @@ class AzureStorageBlockDeviceAPI(object):
             disk_list.append(self._blockdevicevolume_from_azure_volume(
                 d.label, self._gibytes_to_bytes(d.logical_disk_size_in_gb),
                 role_name))
+
             for i in range(0, len(all_blobs)):
                 if d.label == all_blobs[i].name:
                     # filter blobs that are already registered
@@ -441,7 +332,11 @@ class AzureStorageBlockDeviceAPI(object):
         return disk_list
 
     def detach_delete_all_disks(self):
-
+        """
+        Detaches and deletes all disks for this cloud service.
+        Primarily used for cleanup after tests
+        :returns: A ``list`` of ``BlockDeviceVolume``s.
+        """
         Message.new(Info='Cleaning Up Detaching/Disks').write(_logger)
         deployment = self._azure_service_client.get_deployment_by_name(
             self._service_name, self._service_name)
@@ -506,106 +401,55 @@ class AzureStorageBlockDeviceAPI(object):
                         self._disk_container_name,
                         b.name)
 
-    def _generate_vhd_footer(self, size):
+    def _attach_disk(
+            self,
+            blockdevice_id,
+            target_disk,
+            attach_to):
+
         """
-        Generate a binary VHD Footer
-        # Fixed VHD Footer Format Specification
-        # spec:
-        # https://technet.microsoft.com/en-us/virtualization/bb676673.aspx#E3B
-        # Field         Size (bytes)
-        # Cookie        8
-        # Features      4
-        # Version       4
-        # Data Offset   4
-        # TimeStamp     4
-        # Creator App   4
-        # Creator Ver   4
-        # CreatorHostOS 4
-        # Original Size 8
-        # Current Size  8
-        # Disk Geo      4
-        # Disk Type     4
-        # Checksum      4
-        # Unique ID     16
-        # Saved State   1
-        # Reserved      427
-        # # the ascii string 'conectix'
+        Attaches disk to specified VM
+        :param string blockdevice_id: The identifier of the disk
+        :param DataVirtualHardDisk/Blob target_disk: The Blob
+               or Disk to be attached
+        :returns int: The size of the attached disk
         """
-        # TODO Are we taking any unreliable dependencies of the content of
-        # the azure VHD footer?
-        cookie = bytearray([0x63, 0x6f, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x78])
-        # no features enabled
-        features = bytearray([0x00, 0x00, 0x00, 0x02])
-        # current file version
-        version = bytearray([0x00, 0x01, 0x00, 0x00])
-        # in the case of a fixed disk, this is set to -1
-        data_offset = bytearray([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                                 0xff])
-        # hex representation of seconds since january 1st 2000
-        timestamp = bytearray.fromhex(hex(
-            long(datetime.datetime.now().strftime("%s")) - 946684800).replace(
-                'L', '').replace('0x', '').zfill(8))
-        # ascii code for 'wa' = windowsazure
-        creator_app = bytearray([0x77, 0x61, 0x00, 0x00])
-        # ascii code for version of creator application
-        creator_version = bytearray([0x00, 0x07, 0x00, 0x00])
-        # creator host os. windows or mac, ascii for 'wi2k'
-        creator_os = bytearray([0x57, 0x69, 0x32, 0x6b])
-        original_size = bytearray.fromhex(hex(size).replace('0x',
-                                                            '').zfill(16))
-        current_size = bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
-        # ox820=2080 cylenders, 0x10=16 heads, 0x3f=63 sectors per cylndr,
-        disk_geometry = bytearray([0x08, 0x20, 0x10, 0x3f])
-        # 0x2 = fixed hard disk
-        disk_type = bytearray([0x00, 0x00, 0x00, 0x02])
-        # a uuid
-        unique_id = bytearray.fromhex(uuid.uuid4().hex)
-        # saved state and reserved
-        saved_reserved = bytearray(428)
 
-        to_checksum_array = cookie \
-            + features \
-            + version \
-            + data_offset \
-            + timestamp \
-            + creator_app \
-            + creator_version \
-            + creator_os \
-            + original_size \
-            + current_size \
-            + disk_geometry \
-            + disk_type \
-            + unique_id \
-            + saved_reserved
+        lun = Lun.compute_next_lun(
+            self._azure_service_client,
+            self._service_name,
+            str(attach_to))
+        common_params = {
+            'service_name': self._service_name,
+            'deployment': self._service_name,
+            'role_name': attach_to,
+            'lun': lun
+        }
+        disk_size = None
 
-        total = 0
-        for b in to_checksum_array:
-            total += b
+        if target_disk.__class__.__name__ == 'Blob':
 
-        total = ~total
+            # exclude 512 byte footer
+            disk_size = target_disk.properties.content_length - 512
 
-        def tohex(val, nbits):
-            return hex((val + (1 << nbits)) % (1 << nbits))
+            common_params['source_media_link'] = \
+                'https://' + self._storage_account_name \
+                + '.blob.core.windows.net/' + self._disk_container_name \
+                + '/' + blockdevice_id
 
-        checksum = bytearray.fromhex(tohex(total, 32).replace('0x', ''))
+            common_params['disk_label'] = blockdevice_id
 
-        blob_data = cookie \
-            + features \
-            + version \
-            + data_offset \
-            + timestamp \
-            + creator_app \
-            + creator_version \
-            + creator_os \
-            + original_size \
-            + current_size \
-            + disk_geometry \
-            + disk_type \
-            + checksum \
-            + unique_id \
-            + saved_reserved
+        else:
 
-        return bytes(blob_data)
+            disk_size = self._gibytes_to_bytes(
+                target_disk.logical_disk_size_in_gb)
+
+            common_params['disk_name'] = target_disk.name
+
+        request = self._azure_service_client.add_data_disk(**common_params)
+        self._wait_for_async(request.request_id, 5000)
+
+        return disk_size
 
     def _disk_label_for_dataset_id(self, dataset_id):
         """
@@ -642,9 +486,7 @@ class AzureStorageBlockDeviceAPI(object):
 
         if target_disk is None:
             # check for unregisterd disk
-            blobs = self._azure_storage_client.list_blobs(
-                self._disk_container_name,
-                prefix='flocker-')
+            blobs = self._get_flocker_blobs()
             for b in blobs:
                 if b.name == str(blockdevice_id):
                     return b, None, None
@@ -665,6 +507,19 @@ class AzureStorageBlockDeviceAPI(object):
             role_name = target_disk.attached_to.role_name
 
         return (target_disk, role_name, target_lun)
+
+    def _get_flocker_blobs(self):
+        all_blobs = []
+
+        blobs = self._azure_storage_client.list_blobs(
+            self._disk_container_name,
+            prefix='flocker-')
+
+        for b in blobs:
+            # todo - this could be big!
+            all_blobs.append(b)
+
+        return all_blobs
 
     def _wait_for_async(self, request_id, timeout):
         count = 0
@@ -701,27 +556,6 @@ class AzureStorageBlockDeviceAPI(object):
             attached_to=attached_to_name,
             dataset_id=self._dataset_id_for_disk_label(label)
         )  # disk labels are formatted as flocker-<data_set_id>
-
-    def _compute_next_remote_lun(self, role_name):
-        vm_info = self._azure_service_client.get_role(self._service_name,
-                                                      self._service_name,
-                                                      role_name)
-        vm_info.data_virtual_hard_disks = \
-            sorted(vm_info.data_virtual_hard_disks, key=lambda obj:
-                   obj.lun)
-        lun = 0
-        for i in range(0, len(vm_info.data_virtual_hard_disks)):
-            next_lun = vm_info.data_virtual_hard_disks[i].lun
-
-            if next_lun - i >= 1:
-                lun = next_lun - 1
-                break
-
-            if i == len(vm_info.data_virtual_hard_disks) - 1:
-                lun = next_lun + 1
-                break
-
-        return lun
 
 
 def azure_driver_from_configuration(
