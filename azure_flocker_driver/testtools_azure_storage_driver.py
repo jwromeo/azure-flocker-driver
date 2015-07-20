@@ -37,14 +37,7 @@ def azure_test_driver_from_yaml(test_case):
             'for details of the expected format.'
         )
 
-    driver = azure_driver_from_configuration(
-        service_name=azure_config['service_name'],
-        subscription_id=azure_config['subscription_id'],
-        storage_account_name=azure_config['storage_account_name'],
-        certificate_data_path=azure_config['management_certificate_path'],
-        storage_account_key=azure_config['storage_account_key'],
-        disk_container_name=azure_config['disk_container_name']
-        )
+    driver = azure_driver_from_configuration(azure_config)
 
     test_case.addCleanup(lambda: driver.detach_delete_all_disks)
     return driver

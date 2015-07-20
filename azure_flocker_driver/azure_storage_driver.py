@@ -50,9 +50,7 @@ class AzureStorageBlockDeviceAPI(object):
     Current Support: Azure SMS API
     """
 
-    def __init__(
-            self, azure_client, azure_storage_client, service_name,
-            deployment_name, storage_account_name, disk_container_name):
+    def __init__(self, **azure_config):
         """
         :param ServiceManagement azure_client: an instance of the azure
         serivce managment api client.
@@ -61,13 +59,16 @@ class AzureStorageBlockDeviceAPI(object):
             names of Azure volumes to identify cluster
         :returns: A ``BlockDeviceVolume``.
         """
-
         self._instance_id = self.compute_instance_id()
-        self._azure_service_client = azure_client
-        self._service_name = service_name
-        self._azure_storage_client = azure_storage_client
-        self._storage_account_name = storage_account_name
-        self._disk_container_name = disk_container_name
+        self._azure_service_client = ServiceManagementService(
+            azure_config['subscription_id'],
+            azure_config['management_certificate_path'])
+        self._service_name = azure_config['service_name']
+        self._azure_storage_client = BlobService(
+            azure_config['storage_account_name'],
+            azure_config['storage_account_key'])
+        self._storage_account_name = azure_config['storage_account_name']
+        self._disk_container_name = azure_config['disk_container_name']
 
     def allocation_unit(self):
         """
@@ -185,9 +186,6 @@ class AzureStorageBlockDeviceAPI(object):
 
         disk_size = self._attach_disk(blockdevice_id, target_disk, attach_to)
 
-        Message.new(Info='waiting for azure to report '
-                    + ' disk as attached...').write(_logger)
-
         self._wait_for_attach(blockdevice_id)
 
         Message.new(Info='disk attached').write(_logger)
@@ -227,12 +225,7 @@ class AzureStorageBlockDeviceAPI(object):
 
         self._wait_for_async(request.request_id, 5000)
 
-        Message.new(Info='waiting for azure to report '
-                    + 'disk as detached...').write(_logger)
-
         self._wait_for_detach(blockdevice_id)
-
-        Message.new(Info='disk detached').write(_logger)
 
     def get_device_path(self, blockdevice_id):
         """
@@ -320,17 +313,11 @@ class AzureStorageBlockDeviceAPI(object):
                     lun=d.lun,
                     delete_vhd=True)
 
-                Message.new(Info='Deleting Disk: ' + str(d.disk_label)
-                            + ' ' + str(d.disk_name)).write(_logger)
+                self._log_delete_disk(d.disk_label, d.disk_name)
                 self._wait_for_async(request.request_id, 5000)
                 deleted_disk_names.append(d.disk_name)
 
-                Message.new(Info='waiting for azure to '
-                            + 'report disk as detached...').write(_logger)
-
                 self._wait_for_detach(d.disk_label)
-                Message.new(Info='Disk Detached: ' + str(d.disk_label)
-                            + ' ' + str(d.disk_name)).write(_logger)
 
         for d in self._azure_service_client.list_disks():
             # only disks labels/blob names with flocker- prefix
@@ -342,19 +329,13 @@ class AzureStorageBlockDeviceAPI(object):
             if 'flocker-' in d.label and (container_link) in d.media_link \
                     and not any(d.name in s for s in deleted_disk_names):
 
-                        Message.new(Info='Deleting Disk: ' + str(d.disk_label)
-                                    + ' ' + str(d.disk_name)).write(_logger)
+                        self._log_delete_disk(d.disk_label, d.disk_name)
                         self._azure_service_client.delete_disk(
                             d.name,
                             delete_vhd=True)
         # all the blobs left over should be unregistered disks
-        for b in self._azure_storage_client.list_blobs(
-                self._disk_container_name, 'flocker-'):
-                    Message.new(Info='Deleting Disk: '
-                                + str(b.name)).write(_logger)
-                    self._azure_storage_client.delete_blob(
-                        self._disk_container_name,
-                        b.name)
+        for b in self._get_flocker_blobs():
+            self._log_delete_disk(b.name)
 
     def _attach_disk(
             self,
@@ -495,11 +476,20 @@ class AzureStorageBlockDeviceAPI(object):
 
         return all_blobs
 
+    def _log_delete_disk(self, disk_label, disk_name=None):
+
+        Message.new(Info='Deleting Disk: ' + str(disk_label)
+                    + ' ' + str(disk_name)).write(_logger)
+
     def _wait_for_detach(self, blockdevice_id):
         role_name = ''
         lun = -1
 
         timeout_count = 0
+
+        Message.new(Info='waiting for azure to '
+                    + 'report disk as detached...').write(_logger)
+
         while role_name is not None or lun is not None:
             (target_disk, role_name, lun) = \
                 self._get_disk_vmname_lun(blockdevice_id)
@@ -509,9 +499,16 @@ class AzureStorageBlockDeviceAPI(object):
             if timeout_count > 5000:
                 break
 
+        Message.new(Info='Disk Detached: ' + str(target_disk.disk_label)
+                    + ' ' + str(target_disk.disk_name)).write(_logger)
+
     def _wait_for_attach(self, blockdevice_id):
         timeout_count = 0
         lun = None
+
+        Message.new(Info='waiting for azure to report '
+                    + ' disk as attached...').write(_logger)
+
         while lun is None:
             (target_disk, role_name, lun) = \
                 self._get_disk_vmname_lun(blockdevice_id)
@@ -558,44 +555,18 @@ class AzureStorageBlockDeviceAPI(object):
         )  # disk labels are formatted as flocker-<data_set_id>
 
 
-def azure_driver_from_configuration(
-        service_name, subscription_id, storage_account_name,
-        storage_account_key,
-        disk_container_name,
-        certificate_data_path,
-        debug=None):
+def azure_driver_from_configuration(config):
     """
     Returns Flocker Azure BlockDeviceAPI from plugin config yml.
-        :param uuid cluster_id: The UUID of the cluster
-        :param string username: The username for Azure Driver,
-            this will be used to login and enable requests to
-            be made to the underlying Azure BlockDeviceAPI
-        :param string password: The username for Azure Driver,
-            this will be used to login and enable requests to be
-            made to the underlying Azure BlockDeviceAPI
-        :param unicode mdm_ip: The Main MDM IP address. Azure
-            Driver will communicate with the Azure Gateway
-            Node to issue REST API commands.
-        :param integer port: MDM Gateway The port
-        :param string protection_domain: The protection domain
-            for this driver instance
-        :param string storage_pool: The storage pool used for
-            this driver instance
-        :param FilePath certificate: An optional certificate
-            to be used for optional authentication methods.
-            The presence of this certificate will change verify
-            to True inside the requests.
-        :param boolean ssl: use SSL?
-        :param boolean debug: verbosity
+        :param dictonary config: The Dictonary representing
+            the data from the configuration yaml
     """
 
     # todo return azure storage driver api
 
-    if not os.path.isfile(certificate_data_path):
+    if not os.path.isfile(config['certificate_data_path']):
         raise IOError(
-            'Certificate ' + certificate_data_path + ' does not exist')
-    sms = ServiceManagementService(subscription_id, certificate_data_path)
-    storage_client = BlobService(storage_account_name, storage_account_key)
-    return AzureStorageBlockDeviceAPI(sms, storage_client, service_name,
-                                      service_name, storage_account_name,
-                                      disk_container_name)
+            'Certificate ' +
+            config['certificate_data_path'] + ' does not exist')
+
+    return AzureStorageBlockDeviceAPI(**config)
