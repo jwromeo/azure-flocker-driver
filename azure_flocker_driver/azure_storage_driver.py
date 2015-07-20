@@ -9,8 +9,8 @@ from azure.storage import BlobService
 from eliot import Message, Logger
 from zope.interface import implementer
 
-from .utils import Lun
-from .utils import Vhd
+from lun import Lun
+from vhd import Vhd
 
 from flocker.node.agents.blockdevice import AlreadyAttachedVolume, \
     IBlockDeviceAPI, BlockDeviceVolume, UnknownVolume, UnattachedVolume
@@ -121,7 +121,7 @@ class AzureStorageBlockDeviceAPI(object):
             x_ms_page_write='update',
             x_ms_range='bytes=' + str((size - 512)) + '-' + str(size - 1))
 
-        label = self._disk_label_for_blockdevice_id(str(dataset_id))
+        label = self._disk_label_for_dataset_id(str(dataset_id))
         return BlockDeviceVolume(
             blockdevice_id=unicode(label),
             size=size,
