@@ -36,78 +36,73 @@ class Vhd(object):
         """
         # TODO Are we taking any unreliable dependencies of the content of
         # the azure VHD footer?
-
+        footer_dict = {}
         # the ascii string 'conectix'
-        cookie = bytearray([0x63, 0x6f, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x78])
+        footer_dict['cookie'] = \
+            bytearray([0x63, 0x6f, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x78])
         # no features enabled
-        features = bytearray([0x00, 0x00, 0x00, 0x02])
+        footer_dict['features'] = bytearray([0x00, 0x00, 0x00, 0x02])
         # current file version
-        version = bytearray([0x00, 0x01, 0x00, 0x00])
+        footer_dict['version'] = bytearray([0x00, 0x01, 0x00, 0x00])
         # in the case of a fixed disk, this is set to -1
-        data_offset = bytearray([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                                 0xff])
+        footer_dict['data_offset'] = \
+            bytearray([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                      0xff])
         # hex representation of seconds since january 1st 2000
-        timestamp = bytearray.fromhex(hex(
-            long(datetime.datetime.now().strftime("%s")) - 946684800).replace(
-                'L', '').replace('0x', '').zfill(8))
+        footer_dict['timestamp'] = Vhd._generate_timestamp()
         # ascii code for 'wa' = windowsazure
-        creator_app = bytearray([0x77, 0x61, 0x00, 0x00])
+        footer_dict['creator_app'] = bytearray([0x77, 0x61, 0x00, 0x00])
         # ascii code for version of creator application
-        creator_version = bytearray([0x00, 0x07, 0x00, 0x00])
+        footer_dict['creator_version'] = \
+            bytearray([0x00, 0x07, 0x00, 0x00])
         # creator host os. windows or mac, ascii for 'wi2k'
-        creator_os = bytearray([0x57, 0x69, 0x32, 0x6b])
-        original_size = bytearray.fromhex(hex(size).replace('0x',
-                                                            '').zfill(16))
-        current_size = bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
+        footer_dict['creator_os'] = \
+            bytearray([0x57, 0x69, 0x32, 0x6b])
+        footer_dict['original_size'] = \
+            bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
+        footer_dict['current_size'] = \
+            bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
         # ox820=2080 cylenders, 0x10=16 heads, 0x3f=63 sectors per cylndr,
-        disk_geometry = bytearray([0x08, 0x20, 0x10, 0x3f])
+        footer_dict['disk_geometry'] = \
+            bytearray([0x08, 0x20, 0x10, 0x3f])
         # 0x2 = fixed hard disk
-        disk_type = bytearray([0x00, 0x00, 0x00, 0x02])
+        footer_dict['disk_type'] = bytearray([0x00, 0x00, 0x00, 0x02])
         # a uuid
-        unique_id = bytearray.fromhex(uuid.uuid4().hex)
+        footer_dict['unique_id'] = bytearray.fromhex(uuid.uuid4().hex)
         # saved state and reserved
-        saved_reserved = bytearray(428)
+        footer_dict['saved_reserved'] = bytearray(428)
 
-        to_checksum_array = cookie \
-            + features \
-            + version \
-            + data_offset \
-            + timestamp \
-            + creator_app \
-            + creator_version \
-            + creator_os \
-            + original_size \
-            + current_size \
-            + disk_geometry \
-            + disk_type \
-            + unique_id \
-            + saved_reserved
+        footer_dict['checksum'] = Vhd._compute_checksum(footer_dict)
+
+        return bytes(Vhd._combine_byte_arrays(footer_dict))
+
+    def _generate_timestamp():
+        hevVal = hex(long(datetime.datetime.now().strftime("%s")) - 946684800)
+        return bytearray.fromhex(hevVal.replace(
+            'L', '').replace('0x', '').zfill(8))
+
+    def _compute_checksum(vhd_data):
+
+        if vhd_data['checksum'] is not None:
+            del vhd_data['checksum']
+
+        wholeArray = Vhd._combine_byte_arrays(vhd_data)
 
         total = 0
-        for b in to_checksum_array:
-            total += b
+        for byte in wholeArray:
+            total += byte
 
+        # ones compliment
         total = ~total
 
         def tohex(val, nbits):
             return hex((val + (1 << nbits)) % (1 << nbits))
 
-        checksum = bytearray.fromhex(tohex(total, 32).replace('0x', ''))
+        return bytearray.fromhex(tohex(total, 32).replace('0x', ''))
 
-        blob_data = cookie \
-            + features \
-            + version \
-            + data_offset \
-            + timestamp \
-            + creator_app \
-            + creator_version \
-            + creator_os \
-            + original_size \
-            + current_size \
-            + disk_geometry \
-            + disk_type \
-            + checksum \
-            + unique_id \
-            + saved_reserved
+    def _combine_byte_arrays(vhd_data):
+        wholeArray = bytearray([])
+        for byteArray in vhd_data:
+            wholeArray += byteArray
 
-        return bytes(blob_data)
+        return wholeArray
