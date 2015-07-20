@@ -46,7 +46,7 @@ def azure_test_driver_from_yaml(test_case):
         disk_container_name=azure_config['disk_container_name']
         )
 
-    test_case.addCleanup(driver.detach_delete_all_disks)
+    test_case.addCleanup(lambda: driver.detach_delete_all_disks)
     return driver
 # def tidy_Azure_client_for_test(test_case):
 #     """
