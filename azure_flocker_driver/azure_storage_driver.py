@@ -127,16 +127,6 @@ class AzureStorageBlockDeviceAPI(object):
             self._get_disk_vmname_lun(blockdevice_id)
 
         if target_disk is None:
-            # Registered disk not found. Check blobs
-            blobs = self._get_flocker_blobs()
-
-            if (blobs[str(blockdevice_id)] is not None):
-                self._azure_storage_client.delete_blob(
-                    container_name=self._disk_container_name,
-                    blob_name=blobs[str(blockdevice_id)].name,
-                    x_ms_delete_snapshots='include')
-
-                return
 
             raise UnknownVolume(blockdevice_id)
 
@@ -155,6 +145,7 @@ class AzureStorageBlockDeviceAPI(object):
                 request = self._azure_service_client.delete_disk(
                     target_disk.name, True)
                 self._wait_for_async(request.request_id, 5000)
+                self._wait_for_detach(blockdevice_id)
 
     def attach_volume(self, blockdevice_id, attach_to):
         """
@@ -288,54 +279,6 @@ class AzureStorageBlockDeviceAPI(object):
                 b.name, b.properties.content_length, None))
 
         return disk_list
-
-    def detach_delete_all_disks(self):
-        """
-        Detaches and deletes all disks for this cloud service.
-        Primarily used for cleanup after tests
-        :returns: A ``list`` of ``BlockDeviceVolume``s.
-        """
-        Message.new(Info='Cleaning Up Detaching/Disks').write(_logger)
-        deployment = self._azure_service_client.get_deployment_by_name(
-            self._service_name, self._service_name)
-
-        for r in deployment.role_instance_list:
-            vm_info = self._azure_service_client.get_role(
-                self._service_name, self._service_name, r.role_name)
-        deleted_disk_names = []
-
-        for d in vm_info.data_virtual_hard_disks:
-            if 'flocker-' in d.disk_label:
-                request = self._azure_service_client.delete_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self._service_name,
-                    role_name=r.role_name,
-                    lun=d.lun,
-                    delete_vhd=True)
-
-                self._log_delete_disk(d.disk_label, d.disk_name)
-                self._wait_for_async(request.request_id, 5000)
-                deleted_disk_names.append(d.disk_name)
-
-                self._wait_for_detach(d.disk_label)
-
-        for d in self._azure_service_client.list_disks():
-            # only disks labels/blob names with flocker- prefix
-            # only those disks within the designated disks container
-            # only those disks which have not already been deleted
-            container_link = 'https://' + self._storage_account_name \
-                + '.blob.core.windows.net/' + self._disk_container_name + '/'
-
-            if 'flocker-' in d.label and (container_link) in d.media_link \
-                    and not any(d.name in s for s in deleted_disk_names):
-
-                        self._log_delete_disk(d.disk_label, d.disk_name)
-                        self._azure_service_client.delete_disk(
-                            d.name,
-                            delete_vhd=True)
-        # all the blobs left over should be unregistered disks
-        for b in self._get_flocker_blobs():
-            self._log_delete_disk(b.name)
 
     def _attach_disk(
             self,
