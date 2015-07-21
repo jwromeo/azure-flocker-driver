@@ -31,8 +31,8 @@ def detach_delete_all_disks(driver):
     """
     Message.new(Info='Cleaning Up Detaching/Disks').write(_logger)
 
-    for d in driver.list_volumes:
-        driver.destroy_volume(d.disk_label)
+    for v in driver.list_volumes():
+        driver.destroy_volume(v.blockdevice_id)
 
 
 def azure_test_driver_from_yaml(test_case):

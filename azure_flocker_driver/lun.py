@@ -18,7 +18,7 @@ class Lun(object):
             subprocess.call(['fdisk', '-l'], stdout=shutup, stderr=shutup)
 
     @staticmethod
-    def compute_next_remote_lun(azure_service_client, service_name, role_name):
+    def compute_next_lun(azure_service_client, service_name, role_name):
         vm_info = azure_service_client.get_role(
             service_name,
             service_name,

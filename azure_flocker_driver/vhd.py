@@ -76,14 +76,16 @@ class Vhd(object):
 
         return bytes(Vhd._combine_byte_arrays(footer_dict))
 
+    @staticmethod
     def _generate_timestamp():
         hevVal = hex(long(datetime.datetime.now().strftime("%s")) - 946684800)
         return bytearray.fromhex(hevVal.replace(
             'L', '').replace('0x', '').zfill(8))
 
+    @staticmethod
     def _compute_checksum(vhd_data):
 
-        if vhd_data['checksum'] is not None:
+        if 'checksum' in vhd_data:
             del vhd_data['checksum']
 
         wholeArray = Vhd._combine_byte_arrays(vhd_data)
@@ -100,9 +102,25 @@ class Vhd(object):
 
         return bytearray.fromhex(tohex(total, 32).replace('0x', ''))
 
+    @staticmethod
     def _combine_byte_arrays(vhd_data):
-        wholeArray = bytearray([])
-        for byteArray in vhd_data:
-            wholeArray += byteArray
+        wholeArray = vhd_data['cookie'] \
+            + vhd_data['features'] \
+            + vhd_data['version'] \
+            + vhd_data['data_offset'] \
+            + vhd_data['timestamp'] \
+            + vhd_data['creator_app'] \
+            + vhd_data['creator_version'] \
+            + vhd_data['creator_os'] \
+            + vhd_data['original_size'] \
+            + vhd_data['current_size'] \
+            + vhd_data['disk_geometry'] \
+            + vhd_data['disk_type']
+
+        if 'checksum' in vhd_data:
+            wholeArray += vhd_data['checksum']
+
+        wholeArray += vhd_data['unique_id'] \
+            + vhd_data['saved_reserved']
 
         return wholeArray
