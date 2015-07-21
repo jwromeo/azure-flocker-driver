@@ -14,12 +14,11 @@ from uuid import uuid4
 from bitmath import GiB
 
 from flocker.testtools import skip_except
-
-from .testtools_azure_storage_driver import azure_test_driver_from_yaml
-
 from flocker.node.agents.test.test_blockdevice import (
     make_iblockdeviceasyncapi_tests, make_iblockdeviceapi_tests
 )
+
+from .testtools_azure_storage_driver import azure_test_driver_from_yaml
 
 
 def azureblockdeviceasyncapi_for_test(test_case):

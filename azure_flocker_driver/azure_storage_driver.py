@@ -1,107 +1,37 @@
 import time
-import datetime
-import uuid
 from uuid import UUID
 import socket
-import re
 import os
-import subprocess
+import sys
 
 from bitmath import Byte, GiB
 from azure.servicemanagement import ServiceManagementService
 from azure.storage import BlobService
-from eliot import Message, Logger
+from eliot import Message, to_file
 from zope.interface import implementer
-from twisted.python.filepath import FilePath
+
+from lun import Lun
+from vhd import Vhd
 
 from flocker.node.agents.blockdevice import AlreadyAttachedVolume, \
     IBlockDeviceAPI, BlockDeviceVolume, UnknownVolume, UnattachedVolume
 
-# Eliot is transitioning away from the "Logger instances all over the place"
-# approach.  And it's hard to put Logger instances on PRecord subclasses which
-# we have a lot of.  So just use this global logger for now.
 
-_logger = Logger()
+# Logging Helpers
+def log_info(message):
 
-# Azure's allocation granularity is 1GB
-
-ALLOCATION_GRANULARITY = 1
+    Message.new(Info=message).write()
 
 
-class Lun(object):
+def log_error(message):
 
-    device_path = ''
-    lun = ''
-
-    def __init__():
-        return
-
-    @staticmethod
-    def rescan_scsi():
-        with open(os.devnull, 'w') as shutup:
-            subprocess.call(['fdisk', '-l'], stdout=shutup, stderr=shutup)
-
-    @staticmethod
-    def compute_next_lun():
-        """
-        Computes the next available LUN on this node (excluding LUN=0)
-        return int: The available LUN
-        """
-        # force the latest scsci info
-        Lun.rescan_scsi()
-        disk_info_string = subprocess.check_output('lsscsi')
-        parts = disk_info_string.strip('\n').split('\n')
-
-        lun = 0
-        count = 0
-        for i in range(0, len(parts)):
-
-            line = parts[i]
-            segments = re.split(':|]|\[', line)
-
-            if int(segments[1]) != 5:
-                continue
-
-            next_lun = int(segments[4])
-
-            if next_lun - count >= 1:
-                lun = next_lun - 1
-                break
-
-            if i == len(parts) - 1:
-                lun = next_lun + 1
-                break
-            count += 1
-            lun = next_lun
-
-        return lun
-
-    # Returns a string representing the block device path based
-    # on a provided lun slot
-
-    @staticmethod
-    def get_device_path_for_lun(lun):
-        """
-        Returns a FilePath representing the path of the device
-        with the sepcified LUN. TODO: Is it valid to predict the
-        path based on the LUN?
-        return FilePath: The FilePath representing the attached disk
-        """
-        Lun.rescan_scsi()
-        if lun > 31:
-            raise Exception('valid lun parameter is 0 - 31, inclusive')
-        base = '/dev/sd'
-
-        # luns go 0-31
-        ascii_base = ord('c')
-
-        return FilePath(base + chr(ascii_base + lun), False)
+    Message.new(Error=message).write()
 
 
 class UnsupportedVolumeSize(Exception):
     """
     The volume size is not supported
-    Needs to be 8GB allocation granularity
+    Needs to be 1GB allocation granularity
     :param unicode dataset_id: The volume dataset_id
     """
 
@@ -115,6 +45,12 @@ class UnsupportedVolumeSize(Exception):
         self.dataset_id = dataset_id
 
 
+class AsynchronousTimeout(Exception):
+
+    def __init__(self):
+        pass
+
+
 @implementer(IBlockDeviceAPI)
 class AzureStorageBlockDeviceAPI(object):
     """
@@ -122,9 +58,7 @@ class AzureStorageBlockDeviceAPI(object):
     Current Support: Azure SMS API
     """
 
-    def __init__(
-            self, azure_client, azure_storage_client, service_name,
-            deployment_name, storage_account_name, disk_container_name):
+    def __init__(self, **azure_config):
         """
         :param ServiceManagement azure_client: an instance of the azure
         serivce managment api client.
@@ -133,13 +67,19 @@ class AzureStorageBlockDeviceAPI(object):
             names of Azure volumes to identify cluster
         :returns: A ``BlockDeviceVolume``.
         """
-
         self._instance_id = self.compute_instance_id()
-        self._azure_service_client = azure_client
-        self._service_name = service_name
-        self._azure_storage_client = azure_storage_client
-        self._storage_account_name = storage_account_name
-        self._disk_container_name = disk_container_name
+        self._azure_service_client = ServiceManagementService(
+            azure_config['subscription_id'],
+            azure_config['management_certificate_path'])
+        self._service_name = azure_config['service_name']
+        self._azure_storage_client = BlobService(
+            azure_config['storage_account_name'],
+            azure_config['storage_account_key'])
+        self._storage_account_name = azure_config['storage_account_name']
+        self._disk_container_name = azure_config['disk_container_name']
+
+        if azure_config['debug']:
+            to_file(sys.stdout)
 
     def allocation_unit(self):
         """
@@ -173,27 +113,9 @@ class AzureStorageBlockDeviceAPI(object):
         if size_in_gb % 1 != 0:
             raise UnsupportedVolumeSize(dataset_id)
 
-        # Create a new page blob as a blank disk
-        self._azure_storage_client.put_blob(
-            container_name=self._disk_container_name,
-            blob_name=self._disk_label_for_dataset_id(dataset_id),
-            blob=None,
-            x_ms_blob_type='PageBlob',
-            x_ms_blob_content_type='application/octet-stream',
-            x_ms_blob_content_length=size)
+        self._create_volume_blob(size, dataset_id)
 
-        # for disk to be a valid vhd it requires a vhd footer
-        # on the last 512 bytes
-        vhd_footer = self._generate_vhd_footer(size)
-
-        self._azure_storage_client.put_page(
-            container_name=self._disk_container_name,
-            blob_name=self._disk_label_for_dataset_id(dataset_id),
-            page=vhd_footer,
-            x_ms_page_write='update',
-            x_ms_range='bytes=' + str((size - 512)) + '-' + str(size - 1))
-
-        label = self._disk_label_for_blockdevice_id(str(dataset_id))
+        label = self._disk_label_for_dataset_id(str(dataset_id))
         return BlockDeviceVolume(
             blockdevice_id=unicode(label),
             size=size,
@@ -209,34 +131,24 @@ class AzureStorageBlockDeviceAPI(object):
             exist.
         :return: ``None``
         """
-        Message.new(Info='Destorying block device: '
-                    + str(blockdevice_id)).write(_logger)
-
+        log_info('Destorying block device: ' + str(blockdevice_id))
         (target_disk, role_name, lun) = \
             self._get_disk_vmname_lun(blockdevice_id)
 
         if target_disk is None:
-            blobs = self._azure_storage_client.list_blobs(
-                self._disk_container_name,
-                prefix='flocker-')
-
-            for b in blobs:
-                if b.name == str(blockdevice_id):
-
-                    self._azure_storage_client.delete_blob(
-                        container_name=self._disk_container_name,
-                        blob_name=b.name,
-                        x_ms_delete_snapshots='include')
-                    return
 
             raise UnknownVolume(blockdevice_id)
+
+        request = None
 
         if lun is not None:
             request = \
                 self._azure_service_client.delete_data_disk(
                     service_name=self._service_name,
                     deployment_name=self._service_name,
-                    role_name=target_disk.name, lun=lun, delete_vhd=True)
+                    role_name=target_disk.attached_to.role_name,
+                    lun=lun,
+                    delete_vhd=True)
         else:
             if target_disk.__class__.__name__ == 'Blob':
                 # unregistered disk
@@ -245,7 +157,10 @@ class AzureStorageBlockDeviceAPI(object):
             else:
                 request = self._azure_service_client.delete_disk(
                     target_disk.name, True)
-                self._wait_for_async(request.request_id, 5000)
+
+        if request is not None:
+            self._wait_for_async(request.request_id, 5000)
+            self._wait_for_detach(blockdevice_id)
 
     def attach_volume(self, blockdevice_id, attach_to):
         """
@@ -272,58 +187,18 @@ class AzureStorageBlockDeviceAPI(object):
         if lun is not None:
             raise AlreadyAttachedVolume(blockdevice_id)
 
-        request = None
-        disk_size = 0
-        remote_lun = self._compute_next_remote_lun(str(attach_to))
+        log_info('Attempting to attach ' + str(blockdevice_id)
+                 + ' to ' + str(attach_to))
 
-        Message.new(Info='Attempting to attach ' + str(blockdevice_id)
-                    + ' to ' + str(attach_to)).write(_logger)
-        if target_disk.__class__.__name__ == 'Blob':
-            disk_size = target_disk.properties.content_length
-            request = \
-                self._azure_service_client.add_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self._service_name,
-                    role_name=str(attach_to), lun=remote_lun,
-                    disk_label=blockdevice_id,
-                    source_media_link='https://' + self._storage_account_name
-                    + '.blob.core.windows.net/' + self._disk_container_name
-                    + '/' + blockdevice_id)
-        else:
+        disk_size = self._attach_disk(blockdevice_id, target_disk, attach_to)
 
-            request = \
-                self._azure_service_client.add_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self._service_name,
-                    role_name=str(attach_to), lun=remote_lun,
-                    disk_name=target_disk.name)
+        self._wait_for_attach(blockdevice_id)
 
-        self._wait_for_async(request.request_id, 5000)
+        log_info('disk attached')
 
-        Message.new(Info='waiting for azure to report '
-                    + ' disk as attached...').write(_logger)
-
-        timeout_count = 0
-
-        while lun is None:
-            (target_disk, role_name, lun) = \
-                self._get_disk_vmname_lun(blockdevice_id)
-            time.sleep(1)
-            timeout_count += 1
-
-            if timeout_count > 5000:
-                break
-        Message.new(Info='disk attached').write(_logger)
-
-        if target_disk.__class__.__name__ == 'Blob':
-            return self._blockdevicevolume_from_azure_volume(blockdevice_id,
-                                                             disk_size,
-                                                             attach_to)
-        else:
-            return self._blockdevicevolume_from_azure_volume(
-                target_disk.label,
-                self._gibytes_to_bytes(target_disk.logical_disk_size_in_gb),
-                attach_to)
+        return self._blockdevicevolume_from_azure_volume(blockdevice_id,
+                                                         disk_size,
+                                                         attach_to)
 
     def detach_volume(self, blockdevice_id):
         """
@@ -356,19 +231,7 @@ class AzureStorageBlockDeviceAPI(object):
 
         self._wait_for_async(request.request_id, 5000)
 
-        timeout_count = 0
-        Message.new(Info='waiting for azure to report '
-                    + 'disk as attached...').write(_logger)
-        while role_name is not None or lun is not None:
-            (target_disk, role_name, lun) = \
-                self._get_disk_vmname_lun(blockdevice_id)
-            time.sleep(1)
-            timeout_count += 1
-
-            if timeout_count > 5000:
-                break
-
-        Message.new(Info='disk detached').write(_logger)
+        self._wait_for_detach(blockdevice_id)
 
     def get_device_path(self, blockdevice_id):
         """
@@ -403,14 +266,7 @@ class AzureStorageBlockDeviceAPI(object):
             + '.blob.core.windows.net/' + self._disk_container_name
         disks = self._azure_service_client.list_disks()
         disk_list = []
-        blobs = self._azure_storage_client.list_blobs(
-            self._disk_container_name,
-            prefix='flocker-')
-        all_blobs = []
-        for b in blobs:
-            # todo - this could be big!
-            all_blobs.append(b)
-
+        all_blobs = self._get_flocker_blobs()
         for d in disks:
 
             if media_url_prefix not in d.media_link or \
@@ -427,185 +283,88 @@ class AzureStorageBlockDeviceAPI(object):
             disk_list.append(self._blockdevicevolume_from_azure_volume(
                 d.label, self._gibytes_to_bytes(d.logical_disk_size_in_gb),
                 role_name))
-            for i in range(0, len(all_blobs)):
-                if d.label == all_blobs[i].name:
-                    # filter blobs that are already registered
-                    del all_blobs[i]
-                    break
 
-        for b in all_blobs:
+            if d.label in all_blobs:
+                del all_blobs[d.label]
+
+        for key in all_blobs:
             # include unregistered 'disk' blobs
             disk_list.append(self._blockdevicevolume_from_azure_volume(
-                b.name, b.properties.content_length, None))
+                all_blobs[key].name,
+                all_blobs[key].properties.content_length,
+                None))
 
         return disk_list
 
-    def detach_delete_all_disks(self):
+    def _attach_disk(
+            self,
+            blockdevice_id,
+            target_disk,
+            attach_to):
 
-        Message.new(Info='Cleaning Up Detaching/Disks').write(_logger)
-        deployment = self._azure_service_client.get_deployment_by_name(
-            self._service_name, self._service_name)
-
-        for r in deployment.role_instance_list:
-            vm_info = self._azure_service_client.get_role(
-                self._service_name, self._service_name, r.role_name)
-        deleted_disk_names = []
-
-        for d in vm_info.data_virtual_hard_disks:
-            if 'flocker-' in d.disk_label:
-                request = self._azure_service_client.delete_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self._service_name,
-                    role_name=r.role_name,
-                    lun=d.lun,
-                    delete_vhd=True)
-
-                Message.new(Info='Deleting Disk: ' + str(d.disk_label)
-                            + ' ' + str(d.disk_name)).write(_logger)
-                self._wait_for_async(request.request_id, 5000)
-                deleted_disk_names.append(d.disk_name)
-
-                Message.new(Info='waiting for azure to '
-                            + 'report disk as detached...').write(_logger)
-
-                role_name = r.role_name
-                lun = d.lun
-                timeout_count = 0
-                while role_name is not None or lun is not None:
-                    (target_disk, role_name, lun) = \
-                        self._get_disk_vmname_lun(d.disk_label)
-                    time.sleep(1)
-                    timeout_count += 1
-
-                    if timeout_count > 5000:
-                        break
-                Message.new(Info='Disk Detached: ' + str(d.disk_label)
-                            + ' ' + str(d.disk_name)).write(_logger)
-
-        for d in self._azure_service_client.list_disks():
-            # only disks labels/blob names with flocker- prefix
-            # only those disks within the designated disks container
-            # only those disks which have not already been deleted
-            container_link = 'https://' + self._storage_account_name \
-                + '.blob.core.windows.net/' + self._disk_container_name + '/'
-
-            if 'flocker-' in d.label and (container_link) in d.media_link \
-                    and not any(d.name in s for s in deleted_disk_names):
-
-                        Message.new(Info='Deleting Disk: ' + str(d.disk_label)
-                                    + ' ' + str(d.disk_name)).write(_logger)
-                        self._azure_service_client.delete_disk(
-                            d.name,
-                            delete_vhd=True)
-        # all the blobs left over should be unregistered disks
-        for b in self._azure_storage_client.list_blobs(
-                self._disk_container_name, 'flocker-'):
-                    Message.new(Info='Deleting Disk: '
-                                + str(b.name)).write(_logger)
-                    self._azure_storage_client.delete_blob(
-                        self._disk_container_name,
-                        b.name)
-
-    def _generate_vhd_footer(self, size):
         """
-        Generate a binary VHD Footer
-        # Fixed VHD Footer Format Specification
-        # spec:
-        # https://technet.microsoft.com/en-us/virtualization/bb676673.aspx#E3B
-        # Field         Size (bytes)
-        # Cookie        8
-        # Features      4
-        # Version       4
-        # Data Offset   4
-        # TimeStamp     4
-        # Creator App   4
-        # Creator Ver   4
-        # CreatorHostOS 4
-        # Original Size 8
-        # Current Size  8
-        # Disk Geo      4
-        # Disk Type     4
-        # Checksum      4
-        # Unique ID     16
-        # Saved State   1
-        # Reserved      427
-        # # the ascii string 'conectix'
+        Attaches disk to specified VM
+        :param string blockdevice_id: The identifier of the disk
+        :param DataVirtualHardDisk/Blob target_disk: The Blob
+               or Disk to be attached
+        :returns int: The size of the attached disk
         """
-        # TODO Are we taking any unreliable dependencies of the content of
-        # the azure VHD footer?
-        cookie = bytearray([0x63, 0x6f, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x78])
-        # no features enabled
-        features = bytearray([0x00, 0x00, 0x00, 0x02])
-        # current file version
-        version = bytearray([0x00, 0x01, 0x00, 0x00])
-        # in the case of a fixed disk, this is set to -1
-        data_offset = bytearray([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                                 0xff])
-        # hex representation of seconds since january 1st 2000
-        timestamp = bytearray.fromhex(hex(
-            long(datetime.datetime.now().strftime("%s")) - 946684800).replace(
-                'L', '').replace('0x', '').zfill(8))
-        # ascii code for 'wa' = windowsazure
-        creator_app = bytearray([0x77, 0x61, 0x00, 0x00])
-        # ascii code for version of creator application
-        creator_version = bytearray([0x00, 0x07, 0x00, 0x00])
-        # creator host os. windows or mac, ascii for 'wi2k'
-        creator_os = bytearray([0x57, 0x69, 0x32, 0x6b])
-        original_size = bytearray.fromhex(hex(size).replace('0x',
-                                                            '').zfill(16))
-        current_size = bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
-        # ox820=2080 cylenders, 0x10=16 heads, 0x3f=63 sectors per cylndr,
-        disk_geometry = bytearray([0x08, 0x20, 0x10, 0x3f])
-        # 0x2 = fixed hard disk
-        disk_type = bytearray([0x00, 0x00, 0x00, 0x02])
-        # a uuid
-        unique_id = bytearray.fromhex(uuid.uuid4().hex)
-        # saved state and reserved
-        saved_reserved = bytearray(428)
 
-        to_checksum_array = cookie \
-            + features \
-            + version \
-            + data_offset \
-            + timestamp \
-            + creator_app \
-            + creator_version \
-            + creator_os \
-            + original_size \
-            + current_size \
-            + disk_geometry \
-            + disk_type \
-            + unique_id \
-            + saved_reserved
+        lun = Lun.compute_next_lun(
+            self._azure_service_client,
+            self._service_name,
+            str(attach_to))
+        common_params = {
+            'service_name': self._service_name,
+            'deployment_name': self._service_name,
+            'role_name': attach_to,
+            'lun': lun
+        }
+        disk_size = None
 
-        total = 0
-        for b in to_checksum_array:
-            total += b
+        if target_disk.__class__.__name__ == 'Blob':
+            # exclude 512 byte footer
+            disk_size = target_disk.properties.content_length
 
-        total = ~total
+            common_params['source_media_link'] = \
+                'https://' + self._storage_account_name \
+                + '.blob.core.windows.net/' + self._disk_container_name \
+                + '/' + blockdevice_id
 
-        def tohex(val, nbits):
-            return hex((val + (1 << nbits)) % (1 << nbits))
+            common_params['disk_label'] = blockdevice_id
 
-        checksum = bytearray.fromhex(tohex(total, 32).replace('0x', ''))
+        else:
 
-        blob_data = cookie \
-            + features \
-            + version \
-            + data_offset \
-            + timestamp \
-            + creator_app \
-            + creator_version \
-            + creator_os \
-            + original_size \
-            + current_size \
-            + disk_geometry \
-            + disk_type \
-            + checksum \
-            + unique_id \
-            + saved_reserved
+            disk_size = self._gibytes_to_bytes(
+                target_disk.logical_disk_size_in_gb)
 
-        return bytes(blob_data)
+            common_params['disk_name'] = target_disk.name
+
+        request = self._azure_service_client.add_data_disk(**common_params)
+        self._wait_for_async(request.request_id, 5000)
+
+        return disk_size
+
+    def _create_volume_blob(self, size, dataset_id):
+        # Create a new page blob as a blank disk
+        self._azure_storage_client.put_blob(
+            container_name=self._disk_container_name,
+            blob_name=self._disk_label_for_dataset_id(dataset_id),
+            blob=None,
+            x_ms_blob_type='PageBlob',
+            x_ms_blob_content_type='application/octet-stream',
+            x_ms_blob_content_length=size)
+
+        # for disk to be a valid vhd it requires a vhd footer
+        # on the last 512 bytes
+        vhd_footer = Vhd.generate_vhd_footer(size)
+
+        self._azure_storage_client.put_page(
+            container_name=self._disk_container_name,
+            blob_name=self._disk_label_for_dataset_id(dataset_id),
+            page=vhd_footer,
+            x_ms_page_write='update',
+            x_ms_range='bytes=' + str((size - 512)) + '-' + str(size - 1))
 
     def _disk_label_for_dataset_id(self, dataset_id):
         """
@@ -634,7 +393,7 @@ class AzureStorageBlockDeviceAPI(object):
 
         for d in disk_list:
 
-            if not 'flocker-' not in d.label:
+            if 'flocker-' not in d.label:
                 continue
             if d.label == str(blockdevice_id):
                 target_disk = d
@@ -642,13 +401,13 @@ class AzureStorageBlockDeviceAPI(object):
 
         if target_disk is None:
             # check for unregisterd disk
-            blobs = self._azure_storage_client.list_blobs(
-                self._disk_container_name,
-                prefix='flocker-')
-            for b in blobs:
-                if b.name == str(blockdevice_id):
-                    return b, None, None
-            return None, None, None
+            blobs = self._get_flocker_blobs()
+            blob = None
+
+            if str(blockdevice_id) in blobs:
+                blob = blobs[str(blockdevice_id)]
+
+            return blob, None, None
 
         vm_info = None
 
@@ -666,24 +425,70 @@ class AzureStorageBlockDeviceAPI(object):
 
         return (target_disk, role_name, target_lun)
 
+    def _get_flocker_blobs(self):
+        all_blobs = {}
+
+        blobs = self._azure_storage_client.list_blobs(
+            self._disk_container_name,
+            prefix='flocker-')
+
+        for b in blobs:
+            # todo - this could be big!
+            all_blobs[b.name] = b
+
+        return all_blobs
+
+    def _wait_for_detach(self, blockdevice_id):
+        role_name = ''
+        lun = -1
+
+        timeout_count = 0
+
+        log_info('waiting for azure to ' + 'report disk as detached...')
+
+        while role_name is not None or lun is not None:
+            (target_disk, role_name, lun) = \
+                self._get_disk_vmname_lun(blockdevice_id)
+            time.sleep(1)
+            timeout_count += 1
+
+            if timeout_count > 5000:
+                raise AsynchronousTimeout()
+
+        log_info('Disk Detached')
+
+    def _wait_for_attach(self, blockdevice_id):
+        timeout_count = 0
+        lun = None
+
+        log_info('waiting for azure to report disk as attached...')
+
+        while lun is None:
+            (target_disk, role_name, lun) = \
+                self._get_disk_vmname_lun(blockdevice_id)
+            time.sleep(.001)
+            timeout_count += 1
+
+            if timeout_count > 5000:
+                raise AsynchronousTimeout()
+
     def _wait_for_async(self, request_id, timeout):
         count = 0
         result = self._azure_service_client.get_operation_status(request_id)
         while result.status == 'InProgress':
             count = count + 1
             if count > timeout:
-                Message.new(Info='Timed out waiting for '
-                            + 'async operation to complete.').write(_logger)
-                return
-            time.sleep(5)
-            Message.new(Info='.').write(_logger)
+                log_error('Timed out waiting for async operation to complete.')
+                raise AsynchronousTimeout()
+            time.sleep(.001)
+            log_info('.')
             result = self._azure_service_client.get_operation_status(
                 request_id)
             if result.error:
-                Message.new(Error=str(result.error.code)).write(_logger)
+                log_error(result.error.code)
+                log_error(str(result.error.message))
 
-        Message.new(Info=result.status
-                    + ' in ' + str(count * 5) + 's').write(_logger)
+        log_error(result.status + ' in ' + str(count * 5) + 's')
 
     def _gibytes_to_bytes(self, size):
 
@@ -702,66 +507,19 @@ class AzureStorageBlockDeviceAPI(object):
             dataset_id=self._dataset_id_for_disk_label(label)
         )  # disk labels are formatted as flocker-<data_set_id>
 
-    def _compute_next_remote_lun(self, role_name):
-        vm_info = self._azure_service_client.get_role(self._service_name,
-                                                      self._service_name,
-                                                      role_name)
-        vm_info.data_virtual_hard_disks = \
-            sorted(vm_info.data_virtual_hard_disks, key=lambda obj:
-                   obj.lun)
-        lun = 0
-        for i in range(0, len(vm_info.data_virtual_hard_disks)):
-            next_lun = vm_info.data_virtual_hard_disks[i].lun
 
-            if next_lun - i >= 1:
-                lun = next_lun - 1
-                break
-
-            if i == len(vm_info.data_virtual_hard_disks) - 1:
-                lun = next_lun + 1
-                break
-
-        return lun
-
-
-def azure_driver_from_configuration(
-        service_name, subscription_id, storage_account_name,
-        storage_account_key,
-        disk_container_name,
-        certificate_data_path,
-        debug=None):
+def azure_driver_from_configuration(config):
     """
     Returns Flocker Azure BlockDeviceAPI from plugin config yml.
-        :param uuid cluster_id: The UUID of the cluster
-        :param string username: The username for Azure Driver,
-            this will be used to login and enable requests to
-            be made to the underlying Azure BlockDeviceAPI
-        :param string password: The username for Azure Driver,
-            this will be used to login and enable requests to be
-            made to the underlying Azure BlockDeviceAPI
-        :param unicode mdm_ip: The Main MDM IP address. Azure
-            Driver will communicate with the Azure Gateway
-            Node to issue REST API commands.
-        :param integer port: MDM Gateway The port
-        :param string protection_domain: The protection domain
-            for this driver instance
-        :param string storage_pool: The storage pool used for
-            this driver instance
-        :param FilePath certificate: An optional certificate
-            to be used for optional authentication methods.
-            The presence of this certificate will change verify
-            to True inside the requests.
-        :param boolean ssl: use SSL?
-        :param boolean debug: verbosity
+        :param dictonary config: The Dictonary representing
+            the data from the configuration yaml
     """
 
     # todo return azure storage driver api
 
-    if not os.path.isfile(certificate_data_path):
+    if not os.path.isfile(config['management_certificate_path']):
         raise IOError(
-            'Certificate ' + certificate_data_path + ' does not exist')
-    sms = ServiceManagementService(subscription_id, certificate_data_path)
-    storage_client = BlobService(storage_account_name, storage_account_key)
-    return AzureStorageBlockDeviceAPI(sms, storage_client, service_name,
-                                      service_name, storage_account_name,
-                                      disk_container_name)
+            'Certificate ' +
+            config['management_certificate_path'] + ' does not exist')
+
+    return AzureStorageBlockDeviceAPI(**config)
