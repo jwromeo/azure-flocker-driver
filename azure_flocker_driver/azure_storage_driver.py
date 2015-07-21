@@ -16,9 +16,16 @@ from vhd import Vhd
 from flocker.node.agents.blockdevice import AlreadyAttachedVolume, \
     IBlockDeviceAPI, BlockDeviceVolume, UnknownVolume, UnattachedVolume
 
-# Azure's allocation granularity is 1GB
 
-ALLOCATION_GRANULARITY = 1
+# Logging Helpers
+def log_info(message):
+
+    Message.new(Info=message).write()
+
+
+def log_error(message):
+
+    Message.new(Error=message).write()
 
 
 class UnsupportedVolumeSize(Exception):
@@ -124,9 +131,7 @@ class AzureStorageBlockDeviceAPI(object):
             exist.
         :return: ``None``
         """
-        Message.new(Info='Destorying block device: '
-                    + str(blockdevice_id)).write()
-
+        log_info('Destorying block device: ' + str(blockdevice_id))
         (target_disk, role_name, lun) = \
             self._get_disk_vmname_lun(blockdevice_id)
 
@@ -182,14 +187,14 @@ class AzureStorageBlockDeviceAPI(object):
         if lun is not None:
             raise AlreadyAttachedVolume(blockdevice_id)
 
-        Message.new(Info='Attempting to attach ' + str(blockdevice_id)
-                    + ' to ' + str(attach_to)).write()
+        log_info('Attempting to attach ' + str(blockdevice_id)
+                 + ' to ' + str(attach_to))
 
         disk_size = self._attach_disk(blockdevice_id, target_disk, attach_to)
 
         self._wait_for_attach(blockdevice_id)
 
-        Message.new(Info='disk attached').write()
+        log_info('disk attached')
 
         return self._blockdevicevolume_from_azure_volume(blockdevice_id,
                                                          disk_size,
@@ -433,19 +438,13 @@ class AzureStorageBlockDeviceAPI(object):
 
         return all_blobs
 
-    def _log_delete_disk(self, disk_label, disk_name=None):
-
-        Message.new(Info='Deleting Disk: ' + str(disk_label)
-                    + ' ' + str(disk_name)).write()
-
     def _wait_for_detach(self, blockdevice_id):
         role_name = ''
         lun = -1
 
         timeout_count = 0
 
-        Message.new(Info='waiting for azure to '
-                    + 'report disk as detached...').write()
+        log_info('waiting for azure to ' + 'report disk as detached...')
 
         while role_name is not None or lun is not None:
             (target_disk, role_name, lun) = \
@@ -456,14 +455,13 @@ class AzureStorageBlockDeviceAPI(object):
             if timeout_count > 5000:
                 raise AsynchronousTimeout()
 
-        Message.new(Info='Disk Detached').write()
+        log_info('Disk Detached')
 
     def _wait_for_attach(self, blockdevice_id):
         timeout_count = 0
         lun = None
 
-        Message.new(Info='waiting for azure to report '
-                    + ' disk as attached...').write()
+        log_info('waiting for azure to report disk as attached...')
 
         while lun is None:
             (target_disk, role_name, lun) = \
@@ -480,19 +478,17 @@ class AzureStorageBlockDeviceAPI(object):
         while result.status == 'InProgress':
             count = count + 1
             if count > timeout:
-                Message.new(Info='Timed out waiting for '
-                            + 'async operation to complete.').write()
+                log_error('Timed out waiting for async operation to complete.')
                 raise AsynchronousTimeout()
             time.sleep(.001)
-            Message.new(Info='.').write()
+            log_info('.')
             result = self._azure_service_client.get_operation_status(
                 request_id)
             if result.error:
-                Message.new(Error=str(result.error.code)).write()
-        Message.new(Error=str(result.error.message)).write()
+                log_error(result.error.code)
+        log_error(str(result.error.message))
 
-        Message.new(Info=result.status
-                    + ' in ' + str(count * 5) + 's').write()
+        log_error(result.status + ' in ' + str(count * 5) + 's')
 
     def _gibytes_to_bytes(self, size):
 
