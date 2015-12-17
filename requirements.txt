@@ -1,4 +1,4 @@
-azure==0.11.1
+azure==1.0.2
 eliot==0.7.1
 flake8==2.4.1
 tox==2.1.1
