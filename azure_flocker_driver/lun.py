@@ -18,10 +18,10 @@ class Lun(object):
             subprocess.call(['fdisk', '-l'], stdout=shutup, stderr=shutup)
 
     @staticmethod
-    def compute_next_lun(azure_service_client, service_name, role_name):
+    def compute_next_lun(azure_service_client, group_name, role_name):
         vm_info = azure_service_client.get_role(
-            service_name,
-            service_name,
+            group_name,
+            group_name,
             role_name)
 
         vm_info.data_virtual_hard_disks = \

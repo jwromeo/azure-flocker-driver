@@ -8,6 +8,28 @@ class Vhd(object):
         return
 
     @staticmethod
+    def create_blank_vhd(azure_storage_client, container_name, name, size_in_bytes): 
+        # Create a new page blob as a blank disk
+        azure_storage_client.create_container(container_name)
+        azure_storage_client.put_blob(
+            container_name=container_name,
+            blob_name=name,
+            blob=None,
+            x_ms_blob_type='PageBlob',
+            x_ms_blob_content_type='application/octet-stream',
+            x_ms_blob_content_length=size_in_bytes)
+        # for disk to be a valid vhd it requires a vhd footer
+        # on the last 512 bytes
+        vhd_footer = Vhd.generate_vhd_footer(size_in_bytes)
+        azure_storage_client.put_page(
+            container_name=container_name,
+            blob_name=name,
+            page=vhd_footer,
+            x_ms_page_write='update',
+            x_ms_range='bytes=' + str((size_in_bytes - 512)) + '-' + str(size_in_bytes - 1))
+
+        return 'https://' + azure_storage_client.account_name + '.blob.core.windows.net/' + container_name + '/' + name
+    @staticmethod
     def generate_vhd_footer(size):
         """
         Generate a binary VHD Footer
