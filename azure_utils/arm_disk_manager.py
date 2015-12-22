@@ -33,21 +33,49 @@ class DiskManager(object):
     return None
 
   def compute_next_lun(self, data_disks):
+      lun = 0
+      for i in range(0, len(data_disks)):
+          next_lun = data_disks[i].lun
 
-        for i in range(0, len(data_disks)):
-            next_lun = data_disks[i].lun
+          if next_lun - i >= 1:
+              lun = next_lun - 1
+              break
 
-            if next_lun - i >= 1:
-                lun = next_lun - 1
-                break
+          if i == len(data_disks) - 1:
+              lun = next_lun + 1
+              break
 
-            if i == len(data_disks) - 1:
-                lun = next_lun + 1
-                break
+      return lun
 
-        return lun
+  def attach_disk(self, vm_name, vhd_name, vhd_link, vhd_size_in_gibs):
+    return self._attach_or_detach_disk(vm_name, vhd_name, vhd_link, vhd_size_in_gibs)
 
-  def attach_or_detach_disk(self, vhd_name, vhd_link, vhd_size_in_gibs, detach=False):
+  def detach_disk(self, vm_name, vhd_name, vhd_link, vhd_size_in_gibs):
+    return self._attach_or_detach_disk(vm_name, vhd_name, vhd_link, vhd_size_in_gibs, True)
+
+  def list_disks(self, vm_name):
+    parameters = ResourceListParameters(
+      resource_group_name=self._resource_group,
+      resource_type='Microsoft.Compute/virtualMachines')
+    result = self._resource_client.resources.list(parameters)
+
+    api_versions = self._get_supported_api_versions(result.resources[0].location, 'Microsoft.Compute', 'virtualMachines')
+
+    if len(api_versions) == 0:
+      raise Exception('No API Version supported for Microsoft.Compute/virtualMachines in location ' + result.resources[0].location)
+    
+    identity = ResourceIdentity(
+      resource_name=result.resources[0].name, 
+      resource_type='virtualMachines',
+      api_version=api_versions[0],
+      resource_namespace='Microsoft.Compute')
+    resource_result = self._resource_client.resources.get(self._resource_group, identity)
+    resource = resource_result.resource
+    properties = json.loads(resource.properties)
+
+    return properties['storageProfile']['dataDisks']
+
+  def _attach_or_detach_disk(self, vm_name, vhd_name, vhd_link, vhd_size_in_gibs, detach=False):
     parameters = ResourceListParameters(
       resource_group_name=self._resource_group,
       resource_type='Microsoft.Compute/virtualMachines')
@@ -70,7 +98,7 @@ class DiskManager(object):
     if (not detach):
       # attach specified disk
       properties['storageProfile']['dataDisks'].append({
-                      "lun": compute_next_lun(properties['storageProfile']['dataDisks']),
+                      "lun": self.compute_next_lun(properties['storageProfile']['dataDisks']),
                       "name": vhd_name,
                       "createOption": "Attach",
                       "vhd": {
