@@ -34,8 +34,13 @@ class DiskManager(object):
 
   def compute_next_lun(self, data_disks):
       lun = 0
+      print 'Listed: '
+      print len(data_disks)
+      print ' disks'
       for i in range(0, len(data_disks)):
-          next_lun = data_disks[i].lun
+	  print "disk:"
+          print data_disks[i]
+          next_lun = data_disks[i]['lun']
 
           if next_lun - i >= 1:
               lun = next_lun - 1
@@ -109,11 +114,12 @@ class DiskManager(object):
                   })
     else:
       # detach specified disk
-      target_disk
       for i in range(len(properties['storageProfile']['dataDisks'])):
         d = properties['storageProfile']['dataDisks'][i]
-        if d.name == vhd_name:
+        if d['name'] == vhd_name:
           del properties['storageProfile']['dataDisks'][i]
+	  break;
+
     resource.properties = json.dumps(properties)
     self._resource_client.resources.create_or_update(self._resource_group, identity,
       GenericResource(location=resource.location,

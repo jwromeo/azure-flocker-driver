@@ -59,18 +59,19 @@ class DiskCreateTestCase(unittest.TestCase):
 
         link = Vhd.create_blank_vhd(self._azure_storage_client, 
             azure_config['storage_account_container'],
-            'sometestblob.vhd',
+            azure_config['test_vhd_name']+'.vhd',
             int(GiB(2).to_Byte().value))
         print "Attempting to attach disk: " + link
         node_name = unicode(socket.gethostname())
-        manager.attach_disk(node_name, 'test_vhd', link, 2)
+        manager.attach_disk(node_name, azure_config['test_vhd_name'], link, 2)
 
         disks = manager.list_disks(node_name)
-        found = false
+        found = False
         for i in range(len(disks)):
             disk = disks[i]
-            if disk.name == 'test_vhd':
-                found = true
+            if disk['name'] == azure_config['test_vhd_name']:
+                found = True
                 break
 
-        self.assertEqual(found, true, 'Expected to find an attached disk: ' + 'test_vhd')
+        self.assertEqual(found, True, 'Expected to find an attached disk: ' + azure_config['test_vhd_name'])
+	manager.detach_disk(node_name, azure_config['test_vhd_name'], link, 2)
