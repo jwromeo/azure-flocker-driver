@@ -33,13 +33,37 @@ class DiskCreateTestCase(unittest.TestCase):
         self._azure_storage_client = BlobService(
             azure_config['storage_account_name'],
             azure_config['storage_account_key'])
-        link = Vhd.create_blank_vhd(self._azure_storage_client, 
-            azure_config['storage_account_container'],
-            'sometestblob.vhd',
-            int(GiB(2).to_Byte().value))
-        self.assertEqual(link , 'https://sedouardubuntujb.blob.core.windows.net/flocker/sometestblob.vhd')
-        self._azure_storage_client.delete_container(azure_config['storage_account_container'])
 
+        manager = DiskManager(self._resource_client, 
+          self._azure_storage_client,
+          azure_config['storage_account_container'],
+          azure_config['group_name'],
+          azure_config['location'])
+
+        link = manager.create_disk(azure_config['test_vhd_name'], 2)
+        self.assertEqual(link , 'https://' + self._azure_storage_client.account_name + '.blob.core.windows.net/' + azure_config['storage_account_container'] + '/' + azure_config['test_vhd_name'] + '.vhd')
+        disks = manager.list_disks()
+
+        found = False
+        for i in range(len(disks)):
+          disk = disks[i]
+          if disk.name == azure_config['test_vhd_name']:
+            found = True
+            break
+
+        self.assertEqual(found, True, 'Expected disk: ' + azure_config['test_vhd_name'] + ' to be listed in DiskManager.list_disks')
+        
+        manager.destroy_disk(azure_config['test_vhd_name'])
+        disks = manager.list_disks()
+        found = False
+        for i in range(len(disks)):
+          disk = disks[i]
+          if disk.name == azure_config['test_vhd_name']:
+            found = True
+            break
+
+        self.assertEqual(found, False, 'Expected disk: ' + azure_config['test_vhd_name'] + ' not to be listed in DiskManager.list_disks')
+        
     def test_attach_blank_vhd(self):
         auth_token = AuthToken.get_token_from_client_credentials(
             azure_config['subscription_id'],
@@ -49,23 +73,25 @@ class DiskCreateTestCase(unittest.TestCase):
         creds = SubscriptionCloudCredentials(azure_config['subscription_id'], auth_token)
         self._resource_client = ResourceManagementClient(creds)
 
-        manager = DiskManager(self._resource_client, azure_config['group_name'],
-            azure_config['location'])
+        
         creds = SubscriptionCloudCredentials(azure_config['subscription_id'], auth_token)
         self._resource_client = ResourceManagementClient(creds)
         self._azure_storage_client = BlobService(
             azure_config['storage_account_name'],
             azure_config['storage_account_key'])
 
-        link = Vhd.create_blank_vhd(self._azure_storage_client, 
-            azure_config['storage_account_container'],
-            azure_config['test_vhd_name']+'.vhd',
-            int(GiB(2).to_Byte().value))
-        print "Attempting to attach disk: " + link
-        node_name = unicode(socket.gethostname())
-        manager.attach_disk(node_name, azure_config['test_vhd_name'], link, 2)
+        manager = DiskManager(self._resource_client, 
+          self._azure_storage_client,
+          azure_config['storage_account_name'],
+          azure_config['group_name'],
+          azure_config['location'])
 
-        disks = manager.list_disks(node_name)
+        manager.create_disk(azure_config['test_vhd_name'], 2)
+        # print "Attempting to attach disk: " + link
+        node_name = azure_config['test_vm_name']
+        manager.attach_disk(node_name, azure_config['test_vhd_name'], 2)
+
+        disks = manager.list_attached_disks(node_name)
         found = False
         for i in range(len(disks)):
             disk = disks[i]
@@ -74,4 +100,25 @@ class DiskCreateTestCase(unittest.TestCase):
                 break
 
         self.assertEqual(found, True, 'Expected to find an attached disk: ' + azure_config['test_vhd_name'])
-	manager.detach_disk(node_name, azure_config['test_vhd_name'], link, 2)
+        manager.detach_disk(node_name, azure_config['test_vhd_name'])
+
+        disks = manager.list_attached_disks(node_name)
+        found = False
+        for i in range(len(disks)):
+            disk = disks[i]
+            if disk['name'] == azure_config['test_vhd_name']:
+                found = True
+                break
+        self.assertEqual(found, False, 'Expected disk: ' + azure_config['test_vhd_name'] + ' to not be attached');
+
+        manager.destroy_disk(azure_config['test_vhd_name'])
+        all_disks = manager.list_disks()
+        found = False
+        for i in range(len(all_disks)):
+          disk = all_disks[i]
+          if disk.name == azure_config['test_vhd_name']:
+            found = True
+            break
+
+        self.assertEqual(found, False, 'Expected disk: ' + azure_config['test_vhd_name'] + ' not to be listed in DiskManager.list_disks')
+

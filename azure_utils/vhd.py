@@ -1,6 +1,6 @@
 import datetime
 import uuid
-
+import os
 
 class Vhd(object):
 
@@ -28,7 +28,12 @@ class Vhd(object):
             x_ms_page_write='update',
             x_ms_range='bytes=' + str((size_in_bytes - 512)) + '-' + str(size_in_bytes - 1))
 
-        return 'https://' + azure_storage_client.account_name + '.blob.core.windows.net/' + container_name + '/' + name
+        # for on-prem and azure china to override via env
+        if 'STORAGE_HOST_NAME' in os.environ:
+          storage_host_name = os.environ['STORAGE_HOST_NAME']
+        else:
+          storage_host_name = 'blob.core.windows.net'
+        return 'https://' + azure_storage_client.account_name + '.' + storage_host_name + '/' + container_name + '/' + name
     @staticmethod
     def generate_vhd_footer(size):
         """

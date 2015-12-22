@@ -2,14 +2,23 @@ from azure.mgmt.resource import ResourceGroup
 from azure.mgmt.resource import ResourceListParameters
 from azure.mgmt.resource import ResourceIdentity
 from azure.mgmt.resource import GenericResource
+from bitmath import Byte, GiB
+from vhd import Vhd
 import json
+import os
 class DiskManager(object):
 
-  def __init__(self, resource_client, group_name, location):
+  def __init__(self, 
+    resource_client, 
+    storage_client, 
+    disk_container_name, 
+    group_name, 
+    location):
     self._resource_client = resource_client
     self._resource_group = group_name
     self._location = location
-
+    self._storage_client = storage_client
+    self._disk_container = disk_container_name
 
   def _str_array_to_lower(self, str_arry):
     array = []
@@ -20,12 +29,7 @@ class DiskManager(object):
   def _get_supported_api_versions(self, location, resource_namespace, resource_type):
     vm_provider = self._resource_client.providers.get(resource_namespace)
 
-    print dir(vm_provider.provider.resource_types)
-
     for t in vm_provider.provider.resource_types:
-      print t.name + '==' + resource_type
-      print self._str_array_to_lower(t.locations)
-      print t.locations
       if resource_type == t.name and \
         location in self._str_array_to_lower(t.locations):
         return t.api_versions
@@ -34,11 +38,7 @@ class DiskManager(object):
 
   def compute_next_lun(self, data_disks):
       lun = 0
-      print 'Listed: '
-      print len(data_disks)
-      print ' disks'
       for i in range(0, len(data_disks)):
-	  print "disk:"
           print data_disks[i]
           next_lun = data_disks[i]['lun']
 
@@ -52,13 +52,34 @@ class DiskManager(object):
 
       return lun
 
-  def attach_disk(self, vm_name, vhd_name, vhd_link, vhd_size_in_gibs):
-    return self._attach_or_detach_disk(vm_name, vhd_name, vhd_link, vhd_size_in_gibs)
+  def attach_disk(self, vm_name, vhd_name, vhd_size_in_gibs):
+    return self._attach_or_detach_disk(vm_name, vhd_name, vhd_size_in_gibs)
 
-  def detach_disk(self, vm_name, vhd_name, vhd_link, vhd_size_in_gibs):
-    return self._attach_or_detach_disk(vm_name, vhd_name, vhd_link, vhd_size_in_gibs, True)
+  def detach_disk(self, vm_name, vhd_name):
+    return self._attach_or_detach_disk(vm_name, vhd_name, 0, True)
 
-  def list_disks(self, vm_name):
+  def list_disks(self):
+    # will list a max of 5000 blobs, but there really shouldn't be that many
+    disks = self._storage_client.list_blobs(self._disk_container);
+
+    for i in range(len(disks)):
+      disk = disks[i]
+      disk.name = disk.name.replace('.vhd', '')
+
+    return disks
+
+  def destroy_disk(self, disk_name):
+    self._storage_client.delete_blob(self._disk_container, disk_name + '.vhd')
+    return
+
+  def create_disk(self, disk_name, size_in_gibs):
+    link = Vhd.create_blank_vhd(self._storage_client, 
+      self._disk_container,
+      disk_name + '.vhd',
+      int(GiB(size_in_gibs).to_Byte().value))
+    return link
+
+  def list_attached_disks(self, vm_name):
     parameters = ResourceListParameters(
       resource_group_name=self._resource_group,
       resource_type='Microsoft.Compute/virtualMachines')
@@ -80,11 +101,19 @@ class DiskManager(object):
 
     return properties['storageProfile']['dataDisks']
 
-  def _attach_or_detach_disk(self, vm_name, vhd_name, vhd_link, vhd_size_in_gibs, detach=False):
+  def _attach_or_detach_disk(self, vm_name, vhd_name, vhd_size_in_gibs, detach=False):
+    vhd_link = 'https://' + self._storage_client.account_name + '.'
+
+    if 'STORAGE_HOST_NAME' in os.environ:
+      vhd_link += os.environ['STORAGE_HOST_NAME']
+    else:
+      vhd_link += 'blob.core.windows.net'
+
+    vhd_link += '/' + self._disk_container + '/' + vhd_name + '.vhd'
     parameters = ResourceListParameters(
       resource_group_name=self._resource_group,
       resource_type='Microsoft.Compute/virtualMachines')
-    result = self._resource_client.resources.list(parameters)\
+    result = self._resource_client.resources.list(parameters)
 
     api_versions = self._get_supported_api_versions(result.resources[0].location, 'Microsoft.Compute', 'virtualMachines')
 
