@@ -6,6 +6,7 @@ from bitmath import Byte, GiB
 from vhd import Vhd
 import json
 import os
+import uuid
 class DiskManager(object):
 
   def __init__(self, 
@@ -37,20 +38,20 @@ class DiskManager(object):
     return None
 
   def compute_next_lun(self, data_disks):
-      lun = 0
-      for i in range(0, len(data_disks)):
-          print data_disks[i]
-          next_lun = data_disks[i]['lun']
+    lun = 0
+    for i in range(0, len(data_disks)):
+        print data_disks[i]
+        next_lun = data_disks[i]['lun']
 
-          if next_lun - i >= 1:
-              lun = next_lun - 1
-              break
+        if next_lun - i >= 1:
+            lun = next_lun - 1
+            break
 
-          if i == len(data_disks) - 1:
-              lun = next_lun + 1
-              break
+        if i == len(data_disks) - 1:
+            lun = next_lun + 1
+            break
 
-      return lun
+    return lun
 
   def attach_disk(self, vm_name, vhd_name, vhd_size_in_gibs):
     return self._attach_or_detach_disk(vm_name, vhd_name, vhd_size_in_gibs)
@@ -78,6 +79,23 @@ class DiskManager(object):
       disk_name + '.vhd',
       int(GiB(size_in_gibs).to_Byte().value))
     return link
+
+  def is_disk_attached(self, vm_name, disk_name):
+    disks = self.list_attached_disks(vm_name)
+    found = False
+    for i in range(len(disks)):
+      disk = disks[i]
+      if disk['name'] == disk_name:
+          found = True
+          break
+    
+    if (found):
+      return  found
+
+    # check if blob lease is active, this means the disk is
+    # actually still attached, and may be detaching
+    props = self._storage_client.get_blob_properties(self._disk_container, disk_name + '.vhd')
+    return props['x-ms-lease-status'] == 'locked'
 
   def list_attached_disks(self, vm_name):
     parameters = ResourceListParameters(
@@ -128,7 +146,6 @@ class DiskManager(object):
     resource_result = self._resource_client.resources.get(self._resource_group, identity)
     resource = resource_result.resource
     properties = json.loads(resource.properties)
-
     if (not detach):
       # attach specified disk
       properties['storageProfile']['dataDisks'].append({
@@ -141,6 +158,9 @@ class DiskManager(object):
                       "caching": "None",
                       "diskSizeGB": vhd_size_in_gibs
                   })
+      # Azure engineering recommended a workaround
+      # to bad machine state by updating the tag of the VM with the disk
+      resource.tags = { 'arbitrary': str(uuid.uuid4()) }
     else:
       # detach specified disk
       for i in range(len(properties['storageProfile']['dataDisks'])):
@@ -152,7 +172,8 @@ class DiskManager(object):
     resource.properties = json.dumps(properties)
     self._resource_client.resources.create_or_update(self._resource_group, identity,
       GenericResource(location=resource.location,
-                      properties=resource.properties))
+                      properties=resource.properties,
+                      tags=resource.tags))
 
 
 

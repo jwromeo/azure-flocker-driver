@@ -6,6 +6,8 @@ azure_settings:
   storage_account_name: STORAGE-ACCOUNT-NAME
   storage_account_container: STORAGE-ACCOUNT-CONTAINER
   storage_account_key: STORAGE-ACCOUNT-KEY
+  test_vhd_name: test_vhd2
+  test_vm_name: sedouard-flockerdev4
   group_name: AZURE-RESOURCE-GROUP-NAME 
   location: AZURE-RESOURCE-GROUP-LOCAITON
   async_timeout: 5000
