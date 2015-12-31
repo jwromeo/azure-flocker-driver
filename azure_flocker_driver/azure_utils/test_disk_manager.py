@@ -22,31 +22,7 @@ if config_file_path is not None:
     config = yaml.load(config_file.read())
     azure_config = config['azure_settings']
 
-class AsynchronousTimeout(Exception):
-
-    def __init__(self):
-        pass
-
 class DiskCreateTestCase(unittest.TestCase):
-
-    def _wait_disk_attach_detach(self, node_name, vhd_name, attach=True):
-      timeout_count = 0
-      while self._manager.is_disk_attached(node_name, azure_config['test_vhd_name']) is not attach:
-        if attach:
-          print "waiting for disk to attach..."
-        else:
-          print "waiting for disk to detach..."
-        time.sleep(1)
-        timeout_count += 1
-
-        if timeout_count > 60:
-            raise AsynchronousTimeout()
-
-    def _wait_disk_attach(self, node_name, vhd_name):
-      return self._wait_disk_attach_detach(node_name, vhd_name)
-
-    def _wait_disk_detach(self, node_name, vhd_name):
-      return self._wait_disk_attach_detach(node_name, vhd_name, False)
 
     def setUp(self):
       auth_token = AuthToken.get_token_from_client_credentials(
@@ -98,10 +74,8 @@ class DiskCreateTestCase(unittest.TestCase):
         self._manager.create_disk(azure_config['test_vhd_name'], 2)
 
         self._manager.attach_disk(node_name, vhd_name, 2)
-        self._wait_disk_attach(node_name, vhd_name)
 
         self._manager.detach_disk(node_name, vhd_name)
-        self._wait_disk_detach(node_name, vhd_name)
 
         self._manager.destroy_disk(vhd_name)
 

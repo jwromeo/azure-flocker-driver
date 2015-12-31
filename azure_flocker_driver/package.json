@@ -1,0 +1,22 @@
+{
+  "name": "azure-flocker-driver",
+  "version": "1.0.0",
+  "description": "[![Build Status](https://travis-ci.org/sedouard/azure-flocker-driver.svg?branch=master)](https://travis-ci.org/sedouard/azure-flocker-driver)\r [![Code Climate](https://codeclimate.com/github/sedouard/azure-flocker-driver/badges/gpa.svg)](https://codeclimate.com/github/sedouard/azure-flocker-driver)",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sedouard/azure-flocker-driver.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/sedouard/azure-flocker-driver/issues"
+  },
+  "homepage": "https://github.com/sedouard/azure-flocker-driver#readme",
+  "dependencies": {
+    "adal-node": "^0.1.13"
+  }
+}

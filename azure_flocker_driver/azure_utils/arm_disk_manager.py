@@ -7,6 +7,13 @@ from vhd import Vhd
 import json
 import os
 import uuid
+import time
+
+class AzureAsynchronousTimeout(Exception):
+
+    def __init__(self):
+        pass
+
 class DiskManager(object):
 
   def __init__(self, 
@@ -14,12 +21,14 @@ class DiskManager(object):
     storage_client, 
     disk_container_name, 
     group_name, 
-    location):
+    location,
+    async_timeout=600):
     self._resource_client = resource_client
     self._resource_group = group_name
     self._location = location
     self._storage_client = storage_client
     self._disk_container = disk_container_name
+    self._async_timeout = async_timeout
 
   def _str_array_to_lower(self, str_arry):
     array = []
@@ -54,10 +63,30 @@ class DiskManager(object):
     return lun
 
   def attach_disk(self, vm_name, vhd_name, vhd_size_in_gibs):
-    return self._attach_or_detach_disk(vm_name, vhd_name, vhd_size_in_gibs)
+    self._attach_or_detach_disk(vm_name, vhd_name, vhd_size_in_gibs)
+
+    timeout_count = 0
+    while self.is_disk_attached(vm_name, vhd_name) is False:
+      time.sleep(1)
+      timeout_count += 1
+
+      if timeout_count > self._async_timeout:
+        raise AzureAsynchronousTimeout()
+
+    return
 
   def detach_disk(self, vm_name, vhd_name):
-    return self._attach_or_detach_disk(vm_name, vhd_name, 0, True)
+
+    self._attach_or_detach_disk(vm_name, vhd_name, 0, True)
+    timeout_count = 0
+    while self.is_disk_attached(vm_name, vhd_name) is True:
+      time.sleep(1)
+      timeout_count += 1
+
+      if timeout_count > self._async_timeout:
+        raise AzureAsynchronousTimeout()
+
+    return
 
   def list_disks(self):
     # will list a max of 5000 blobs, but there really shouldn't be that many
@@ -155,12 +184,11 @@ class DiskManager(object):
                       "vhd": {
                           "uri": vhd_link
                       },
-                      "caching": "None",
-                      "diskSizeGB": vhd_size_in_gibs
+                      "caching": "None"
                   })
       # Azure engineering recommended a workaround
       # to bad machine state by updating the tag of the VM with the disk
-      resource.tags = { 'arbitrary': str(uuid.uuid4()) }
+      resource.tags = { 'dummy': str(uuid.uuid4()) }
     else:
       # detach specified disk
       for i in range(len(properties['storageProfile']['dataDisks'])):

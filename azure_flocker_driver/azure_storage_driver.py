@@ -3,16 +3,16 @@ from uuid import UUID
 import socket
 import os
 import sys
-
 from bitmath import Byte, GiB
 from azure.servicemanagement import ServiceManagementService
 from azure.storage import BlobService
+from azure_utils import DiskManager
 from eliot import Message, to_file
 from zope.interface import implementer
 
 from lun import Lun
 from vhd import Vhd
-
+from azure_utils import 
 from flocker.node.agents.blockdevice import AlreadyAttachedVolume, \
     IBlockDeviceAPI, BlockDeviceVolume, UnknownVolume, UnattachedVolume
 
@@ -68,13 +68,21 @@ class AzureStorageBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume``.
         """
         self._instance_id = self.compute_instance_id()
-        self._azure_service_client = ServiceManagementService(
+        auth_token = AuthToken.get_token_from_client_credentials(
             azure_config['subscription_id'],
-            azure_config['management_certificate_path'])
-        self._service_name = azure_config['service_name']
+            azure_config['tenant_id'],
+            azure_config['client_id'],
+            azure_config['client_secret'])
+        creds = SubscriptionCloudCredentials(azure_config['subscription_id'], auth_token)
+        self._resource_client = ResourceManagementClient(creds)
         self._azure_storage_client = BlobService(
             azure_config['storage_account_name'],
             azure_config['storage_account_key'])
+        self._manager = DiskManager(self._resource_client, 
+            self._azure_storage_client,
+            azure_config['storage_account_container'],
+            azure_config['group_name'],
+            azure_config['location'])
         self._storage_account_name = azure_config['storage_account_name']
         self._disk_container_name = azure_config['disk_container_name']
 
@@ -113,14 +121,13 @@ class AzureStorageBlockDeviceAPI(object):
         if size_in_gb % 1 != 0:
             raise UnsupportedVolumeSize(dataset_id)
 
-        self._create_volume_blob(size, dataset_id)
+        self._manager.create_disk(dataset_id, size_in_gb)
 
-        label = self._disk_label_for_dataset_id(str(dataset_id))
         return BlockDeviceVolume(
-            blockdevice_id=unicode(label),
+            blockdevice_id=str(dataset_id),
             size=size,
             attached_to=None,
-            dataset_id=self._dataset_id_for_disk_label(label))
+            dataset_id=dataset_id)
 
     def destroy_volume(self, blockdevice_id):
         """
@@ -139,28 +146,7 @@ class AzureStorageBlockDeviceAPI(object):
 
             raise UnknownVolume(blockdevice_id)
 
-        request = None
-
-        if lun is not None:
-            request = \
-                self._azure_service_client.delete_data_disk(
-                    service_name=self._service_name,
-                    deployment_name=self._service_name,
-                    role_name=target_disk.attached_to.role_name,
-                    lun=lun,
-                    delete_vhd=True)
-        else:
-            if target_disk.__class__.__name__ == 'Blob':
-                # unregistered disk
-                self._azure_storage_client.delete_blob(
-                    self._disk_container_name, target_disk.name)
-            else:
-                request = self._azure_service_client.delete_disk(
-                    target_disk.name, True)
-
-        if request is not None:
-            self._wait_for_async(request.request_id, 5000)
-            self._wait_for_detach(blockdevice_id)
+        self._manager.destroy_disk(self, str(blockdevice_id))
 
     def attach_volume(self, blockdevice_id, attach_to):
         """
@@ -178,18 +164,10 @@ class AzureStorageBlockDeviceAPI(object):
             ``host``.
         """
 
-        (target_disk, role_name, lun) = \
-            self._get_disk_vmname_lun(blockdevice_id)
-
-        if target_disk is None:
-            raise UnknownVolume(blockdevice_id)
-
-        if lun is not None:
-            raise AlreadyAttachedVolume(blockdevice_id)
-
         log_info('Attempting to attach ' + str(blockdevice_id)
                  + ' to ' + str(attach_to))
 
+        self._manager.attach_disk(attach_to, blockdevice_id)
         disk_size = self._attach_disk(blockdevice_id, target_disk, attach_to)
 
         self._wait_for_attach(blockdevice_id)
