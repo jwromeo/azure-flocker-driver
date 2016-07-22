@@ -2,7 +2,6 @@ import datetime
 import uuid
 import os
 
-
 class Vhd(object):
 
     def __init__():
@@ -19,7 +18,7 @@ class Vhd(object):
         #
         # The blob itself, must include a footer which is an additional
         # 512 bytes.  So, the size is increased accordingly to allow
-        # for the footer.
+        # for the vhd footer.
         size_in_bytes = size_in_bytes + 512
 
         # Create a new page blob as a blank disk
