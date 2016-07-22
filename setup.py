@@ -17,21 +17,21 @@ setup(
 
     classifiers=[
 
-    'Development Status :: Alpha',
+        'Development Status :: Alpha',
 
-    'Intended Audience :: System Administrators',
-    'Intended Audience :: Developers',
-    'Topic :: Software Development :: Libraries :: Python Modules',
+        'Intended Audience :: System Administrators',
+        'Intended Audience :: Developers',
+        'Topic :: Software Development :: Libraries :: Python Modules',
 
-    'License :: OSI Approved :: MIT',
+        'License :: OSI Approved :: MIT',
 
-    # Python versions supported 
-    'Programming Language :: Python :: 2.7',
+        # Python versions supported
+        'Programming Language :: Python :: 2.7',
     ],
 
     keywords='backend, plugin, flocker, docker, python',
     packages=find_packages(exclude=['test*']),
-    install_requires = ['azure', 'bitmath', 'eliot'],
+    install_requires=['azure', 'bitmath', 'eliot'],
     data_files=[('/etc/flocker/', ['DESCRIPTION.rst']),
                 ('/etc/flocker/', ['azure_storage_test.yml'])]
 )

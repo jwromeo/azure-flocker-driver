@@ -2,15 +2,19 @@ import datetime
 import uuid
 import os
 
+
 class Vhd(object):
 
     def __init__():
         return
 
     @staticmethod
-    def create_blank_vhd(azure_storage_client, container_name, name, size_in_bytes): 
-        # VHD size must be aligned on a megabyte boundary.  The 
-        # current calling function converts from gigabytes to bytes, 
+    def create_blank_vhd(azure_storage_client,
+                         container_name,
+                         name,
+                         size_in_bytes):
+        # VHD size must be aligned on a megabyte boundary.  The
+        # current calling function converts from gigabytes to bytes,
         # but ideally a check should be added.
         #
         # The blob itself, must include a footer which is an additional
@@ -35,14 +39,18 @@ class Vhd(object):
             blob_name=name,
             page=vhd_footer,
             x_ms_page_write='update',
-            x_ms_range='bytes=' + str((size_in_bytes - 512)) + '-' + str(size_in_bytes - 1))
+            x_ms_range='bytes=' + str((size_in_bytes - 512)) +
+                       '-' + str(size_in_bytes - 1))
 
         # for on-prem and azure china to override via env
         if 'STORAGE_HOST_NAME' in os.environ:
-          storage_host_name = os.environ['STORAGE_HOST_NAME']
+            storage_host_name = os.environ['STORAGE_HOST_NAME']
         else:
-          storage_host_name = 'blob.core.windows.net'
-        return 'https://' + azure_storage_client.account_name + '.' + storage_host_name + '/' + container_name + '/' + name
+            storage_host_name = 'blob.core.windows.net'
+        return('https://' + azure_storage_client.account_name +
+               '.' + storage_host_name + '/' + container_name +
+               '/' + name)
+
     @staticmethod
     def generate_vhd_footer(size):
         """

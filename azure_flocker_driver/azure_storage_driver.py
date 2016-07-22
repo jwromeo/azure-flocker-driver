@@ -4,17 +4,19 @@ import socket
 import os
 import sys
 from bitmath import Byte, GiB
-from azure.servicemanagement import ServiceManagementService
 from azure.storage import BlobService
 from azure_utils import DiskManager
+from azure_utils.auth_token import AuthToken
 from eliot import Message, to_file
 from zope.interface import implementer
 
+from azure.mgmt.common import SubscriptionCloudCredentials
+from azure.mgmt.resource import ResourceManagementClient
+
 from lun import Lun
 from vhd import Vhd
-from azure_utils import 
-from flocker.node.agents.blockdevice import AlreadyAttachedVolume, \
-    IBlockDeviceAPI, BlockDeviceVolume, UnknownVolume, UnattachedVolume
+from flocker.node.agents.blockdevice import IBlockDeviceAPI, \
+    BlockDeviceVolume, UnknownVolume, UnattachedVolume
 
 
 # Logging Helpers
@@ -73,16 +75,17 @@ class AzureStorageBlockDeviceAPI(object):
             azure_config['tenant_id'],
             azure_config['client_id'],
             azure_config['client_secret'])
-        creds = SubscriptionCloudCredentials(azure_config['subscription_id'], auth_token)
+        creds = SubscriptionCloudCredentials(azure_config['subscription_id'],
+                                             auth_token)
         self._resource_client = ResourceManagementClient(creds)
         self._azure_storage_client = BlobService(
             azure_config['storage_account_name'],
             azure_config['storage_account_key'])
-        self._manager = DiskManager(self._resource_client, 
-            self._azure_storage_client,
-            azure_config['storage_account_container'],
-            azure_config['group_name'],
-            azure_config['location'])
+        self._manager = DiskManager(self._resource_client,
+                                    self._azure_storage_client,
+                                    azure_config['storage_account_container'],
+                                    azure_config['group_name'],
+                                    azure_config['location'])
         self._storage_account_name = azure_config['storage_account_name']
         self._disk_container_name = azure_config['disk_container_name']
 
@@ -168,12 +171,17 @@ class AzureStorageBlockDeviceAPI(object):
                  + ' to ' + str(attach_to))
 
         self._manager.attach_disk(attach_to, blockdevice_id)
-        disk_size = self._attach_disk(blockdevice_id, target_disk, attach_to)
+        # XXX: this seems redundant?
+        # disk_size = self._attach_disk(blockdevice_id, target_disk, attach_to)
 
         self._wait_for_attach(blockdevice_id)
 
         log_info('disk attached')
 
+        # TODO: this file has not been fully ported to using the
+        # arm_disk_manager, so, data_size below is a temporary
+        # hack to quiet the linter.
+        disk_size = 1024
         return self._blockdevicevolume_from_azure_volume(blockdevice_id,
                                                          disk_size,
                                                          attach_to)
