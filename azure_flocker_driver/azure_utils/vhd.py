@@ -2,6 +2,7 @@ import datetime
 import uuid
 import os
 
+
 class Vhd(object):
 
     def __init__():
@@ -49,6 +50,40 @@ class Vhd(object):
         return('https://' + azure_storage_client.account_name +
                '.' + storage_host_name + '/' + container_name +
                '/' + name)
+
+    @staticmethod
+    def calculate_geometry(size):
+        # this value taken from how Azure generates geometry values for VHDs
+        vhd_sector_length = 512
+
+        total_sectors = size / vhd_sector_length
+        if total_sectors > 65535 * 16 * 255:
+            total_sectors = 65535 * 16 * 255
+
+        if total_sectors > 65535 * 16 * 63:
+            sectors_per_track = 255
+            heads = 16
+            cylinder_times_heads = int(total_sectors / sectors_per_track)
+        else:
+            sectors_per_track = 17
+            cylinder_times_heads = int(total_sectors / sectors_per_track)
+
+            heads = int((cylinder_times_heads + 1023) / 1024)
+            if heads < 4:
+                heads = 4
+
+            if cylinder_times_heads >= (heads * 1024) or heads > 16:
+                sectors_per_track = 31
+                heads = 16
+                cylinder_times_heads = int(total_sectors / sectors_per_track)
+
+            if cylinder_times_heads >= (heads * 1024):
+                sectors_per_track = 63
+                heads = 16
+                cylinder_times_heads = int(total_sectors / sectors_per_track)
+        cylinders = int(cylinder_times_heads / heads)
+
+        return cylinders, heads, sectors_per_track
 
     @staticmethod
     def generate_vhd_footer(size):
@@ -105,9 +140,12 @@ class Vhd(object):
             bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
         footer_dict['current_size'] = \
             bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
-        # ox820=2080 cylenders, 0x10=16 heads, 0x3f=63 sectors per cylndr,
+        # given the size, calculate the geometry -- 2 bytes cylinders,
+        # 1 byte heads, 1 byte sectors
+        (cylinders, heads, sectors) = Vhd.calculate_geometry(size)
         footer_dict['disk_geometry'] = \
-            bytearray([0x08, 0x20, 0x10, 0x3f])
+            bytearray([((cylinders >> 8) & 0xff), (cylinders & 0xff),
+                      (heads & 0xff), (sectors & 0xff)])
         # 0x2 = fixed hard disk
         footer_dict['disk_type'] = bytearray([0x00, 0x00, 0x00, 0x02])
         # a uuid
