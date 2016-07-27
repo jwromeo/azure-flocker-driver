@@ -139,8 +139,8 @@ class DiskManager(object):
             api_version=self.COMPUTE_RESOURCE_PROVIDER_VERSION,
             resource_namespace=self.COMPUTE_RESOURCE_PROVIDER_NAME)
         resource_result = self._resource_client.resources.get(
-                                self._resource_group,
-                                identity)
+            self._resource_group,
+            identity)
         return resource_result.resource
 
     def _create_or_update_with_tag(self, resource, identity):
@@ -149,11 +149,11 @@ class DiskManager(object):
         # update a tag in every PUT requeut with a UUID
         resource.tags = {'updateId': str(uuid.uuid4())}
         result = self._resource_client.resources.create_or_update(
-                        self._resource_group,
-                        identity,
-                        GenericResource(location=resource.location,
-                                        properties=resource.properties,
-                                        tags=resource.tags))
+            self._resource_group,
+            identity,
+            GenericResource(location=resource.location,
+                            properties=resource.properties,
+                            tags=resource.tags))
         print("create_or_update returned result.request_id %s "
               "and result.status_code %s" %
               (result.request_id, result.status_code))
@@ -175,7 +175,7 @@ class DiskManager(object):
             time.sleep(1)
             timeout_count += 1
             update_result = self._resource_client.resources.get(
-                                    self._resource_group, identity)
+                self._resource_group, identity)
             properties = json.loads(update_result.resource.properties)
 
             print("waited for %s s provisioningState is %s" %
@@ -213,17 +213,17 @@ class DiskManager(object):
         if (not detach):
             # attach specified disk
             properties['storageProfile']['dataDisks'].append({
-                      "lun": self.compute_next_lun(
-                                    properties['storageProfile']['dataDisks']),
-                      "name": vhd_name,
-                      "createOption": "Attach",
-                      "vhd": {
-                          "uri": self._storage_client.make_blob_url(
-                                        self._disk_container,
-                                        vhd_name + ".vhd")
-                      },
-                      "caching": "None"
-                  })
+                "lun": self.compute_next_lun(
+                    properties['storageProfile']['dataDisks']),
+                "name": vhd_name,
+                "createOption": "Attach",
+                "vhd": {
+                    "uri": self._storage_client.make_blob_url(
+                        self._disk_container,
+                        vhd_name + ".vhd")
+                },
+                "caching": "None"
+            })
 
         else:      # detach specified disk
             for i in range(len(properties['storageProfile']['dataDisks'])):
