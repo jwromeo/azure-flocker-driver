@@ -1,10 +1,8 @@
-from azure.mgmt.resource import ResourceListParameters
 from azure.mgmt.resource import ResourceIdentity
 from azure.mgmt.resource import GenericResource
 from bitmath import GiB
 from vhd import Vhd
 import json
-import os
 import uuid
 import time
 
@@ -126,8 +124,10 @@ class DiskManager(object):
 
         if (found):
             return found
+
     def list_attached_disks(self, vm_name):
-        # TODO:  For detection of stuck disks, merge in the disk names from Instance View
+        # TODO:  For detection of stuck disks, merge in the disk names
+        # from Instance View
         vm = self.get_vm(vm_name)
         properties = json.loads(vm.properties)
         return properties['storageProfile']['dataDisks']
@@ -138,18 +138,25 @@ class DiskManager(object):
             resource_type=self.VIRTUAL_MACHINES,
             api_version=self.COMPUTE_RESOURCE_PROVIDER_VERSION,
             resource_namespace=self.COMPUTE_RESOURCE_PROVIDER_NAME)
-        resource_result = self._resource_client.resources.get(self._resource_group, identity)
+        resource_result = self._resource_client.resources.get(
+                                self._resource_group,
+                                identity)
         return resource_result.resource
 
     def _create_or_update_with_tag(self, resource, identity):
-        # To ensure the the Microsoft.Compute resource provider will do goal-seeking even if the state
-        # of the VM did not change we will update a tag in every PUT requeut with a UUID
-        resource.tags = { 'updateId' : str(uuid.uuid4()) }
-        result = self._resource_client.resources.create_or_update(self._resource_group, identity,
-                  GenericResource(location=resource.location,
-                  properties=resource.properties,
-                  tags=resource.tags))
-        print("create_or_update returned result.request_id %s and result.status_code %s" % (result.request_id, result.status_code))
+        # To ensure the the Microsoft.Compute resource provider will do
+        # goal-seeking even if the state of the VM did not change we will
+        # update a tag in every PUT requeut with a UUID
+        resource.tags = {'updateId': str(uuid.uuid4())}
+        result = self._resource_client.resources.create_or_update(
+                        self._resource_group,
+                        identity,
+                        GenericResource(location=resource.location,
+                                        properties=resource.properties,
+                                        tags=resource.tags))
+        print("create_or_update returned result.request_id %s "
+              "and result.status_code %s" %
+              (result.request_id, result.status_code))
         return result
 
     def _create_or_update_and_wait_for_success(self, resource, vm_name):
@@ -159,7 +166,7 @@ class DiskManager(object):
             api_version=self.COMPUTE_RESOURCE_PROVIDER_VERSION,
             resource_namespace=self.COMPUTE_RESOURCE_PROVIDER_NAME)
         result = self._create_or_update_with_tag(resource, identity)
-    
+
         # We need to wait on provisioning State to Success
         success = False
         timeout_count = 0
@@ -167,43 +174,53 @@ class DiskManager(object):
         while success is False:
             time.sleep(1)
             timeout_count += 1
-            update_result = self._resource_client.resources.get(self._resource_group, identity)
+            update_result = self._resource_client.resources.get(
+                                    self._resource_group, identity)
             properties = json.loads(update_result.resource.properties)
 
-            print("waited for %s s provisioningState is %s" % (timeout_count, properties["provisioningState"]))
+            print("waited for %s s provisioningState is %s" %
+                  (timeout_count, properties["provisioningState"]))
 
             if (properties['provisioningState'] == "Failed"):
                 # Something went wrong, let's try PUT again
-                result = self._create_or_update_with_tag(self, resource, identity)
+                result = self._create_or_update_with_tag(resource, identity)
 
             # Wait for Success
             if (properties['provisioningState'] == "Succeeded"):
                 success = True
 
             if timeout_count > self._async_timeout:
-                #TODO: Add details to exception
+                # TODO: Add details to exception
                 raise AzureAsynchronousTimeout()
 
         return result
 
-    def _attach_or_detach_disk(self, vm_name, vhd_name, vhd_size_in_gibs, detach=False):
-        # Check current VM State first.  If it is bad we wait to do a no-op update first to try and fix it
+    def _attach_or_detach_disk(self,
+                               vm_name,
+                               vhd_name,
+                               vhd_size_in_gibs,
+                               detach=False):
+        # Check current VM State first.  If it is bad we wait to do a
+        # no-op update first to try and fix it
         resource = self.get_vm(vm_name)
         properties = json.loads(resource.properties)
 
         if (properties['provisioningState'] == "Failed"):
-            self._create_or_update_and_wait(resource, identity)
+            self._create_or_update_and_wait(resource, vm_name)
             resource = self.get_vm(vm_name)
             properties = json.loads(resource.properties)
 
         if (not detach):
             # attach specified disk
             properties['storageProfile']['dataDisks'].append({
-                      "lun": self.compute_next_lun(properties['storageProfile']['dataDisks']),
+                      "lun": self.compute_next_lun(
+                                    properties['storageProfile']['dataDisks']),
                       "name": vhd_name,
                       "createOption": "Attach",
                       "vhd": {
-                          "uri": self._storage_client.make_blob_url(self._disk_container, vhd_name + ".vhd")
+                          "uri": self._storage_client.make_blob_url(
+                                        self._disk_container,
+                                        vhd_name + ".vhd")
                       },
                       "caching": "None"
                   })
@@ -213,7 +230,7 @@ class DiskManager(object):
                 d = properties['storageProfile']['dataDisks'][i]
                 if d['name'] == vhd_name:
                     del properties['storageProfile']['dataDisks'][i]
-                    break;
-        
+                    break
+
         resource.properties = json.dumps(properties)
         self._create_or_update_and_wait_for_success(resource, vm_name)
