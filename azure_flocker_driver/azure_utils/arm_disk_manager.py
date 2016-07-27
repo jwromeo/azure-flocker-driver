@@ -17,6 +17,17 @@ class AzureAsynchronousTimeout(Exception):
 
 class DiskManager(object):
 
+    # Resource provider constants
+    COMPUTE_RESOURCE_PROVIDER_NAME = "Microsoft.Compute"
+
+    COMPUTE_RESOURCE_PROVIDER_VERSION = "2016-03-30"
+
+    VIRTUAL_MACHINES = "virtualMachines"
+
+    STORAGE_RESOURCE_PROVIDER_NAME = "Microsoft.Storage"
+
+    STORAGE_RESORUCE_PROVIDER_VERSION = "2016-01-01"
+
     def __init__(self,
                  resource_client,
                  storage_client,
@@ -37,19 +48,6 @@ class DiskManager(object):
             array.append(s.lower().replace(' ', ''))
 
         return array
-
-    def _get_supported_api_versions(self,
-                                    location,
-                                    resource_namespace,
-                                    resource_type):
-        vm_provider = self._resource_client.providers.get(resource_namespace)
-
-        for t in vm_provider.provider.resource_types:
-            if resource_type == t.name and \
-                    location in self._str_array_to_lower(t.locations):
-                return t.api_versions
-
-        return None
 
     def compute_next_lun(self, data_disks):
         lun = 0
@@ -81,8 +79,8 @@ class DiskManager(object):
         return
 
     def detach_disk(self, vm_name, vhd_name):
-
         self._attach_or_detach_disk(vm_name, vhd_name, 0, True)
+
         timeout_count = 0
         while self.is_disk_attached(vm_name, vhd_name) is True:
             time.sleep(1)
@@ -128,106 +126,94 @@ class DiskManager(object):
 
         if (found):
             return found
-
-        # check if blob lease is active, this means the disk is
-        # actually still attached, and may be detaching
-        props = self._storage_client.get_blob_properties(self._disk_container,
-                                                         disk_name + '.vhd')
-        return props['x-ms-lease-status'] == 'locked'
-
     def list_attached_disks(self, vm_name):
-        parameters = ResourceListParameters(
-            resource_group_name=self._resource_group,
-            resource_type='Microsoft.Compute/virtualMachines')
-        result = self._resource_client.resources.list(parameters)
-
-        location = result.resources[0].location
-        api_versions = self._get_supported_api_versions(location,
-                                                        'Microsoft.Compute',
-                                                        'virtualMachines')
-
-        if len(api_versions) == 0:
-            raise Exception('No API Version supported for '
-                            'Microsoft.Compute/virtualMachines in location '
-                            + result.resources[0].location)
-
-        identity = ResourceIdentity(
-            resource_name=result.resources[0].name,
-            resource_type='virtualMachines',
-            api_version=api_versions[0],
-            resource_namespace='Microsoft.Compute')
-        resource_result = self._resource_client.resources.get(
-            self._resource_group,
-            identity)
-        resource = resource_result.resource
-        properties = json.loads(resource.properties)
-
+        # TODO:  For detection of stuck disks, merge in the disk names from Instance View
+        vm = self.get_vm(vm_name)
+        properties = json.loads(vm.properties)
         return properties['storageProfile']['dataDisks']
 
-    def _attach_or_detach_disk(self,
-                               vm_name,
-                               vhd_name,
-                               vhd_size_in_gibs,
-                               detach=False):
-        vhd_link = 'https://' + self._storage_client.account_name + '.'
-
-        if 'STORAGE_HOST_NAME' in os.environ:
-            vhd_link += os.environ['STORAGE_HOST_NAME']
-        else:
-            vhd_link += 'blob.core.windows.net'
-
-        vhd_link += '/' + self._disk_container + '/' + vhd_name + '.vhd'
-        parameters = ResourceListParameters(
-            resource_group_name=self._resource_group,
-            resource_type='Microsoft.Compute/virtualMachines')
-        result = self._resource_client.resources.list(parameters)
-
-        location = result.resources[0].location
-        api_versions = self._get_supported_api_versions(location,
-                                                        'Microsoft.Compute',
-                                                        'virtualMachines')
-
-        if len(api_versions) == 0:
-            raise Exception('No API Version supported for '
-                            'Microsoft.Compute/virtualMachines in location '
-                            + result.resources[0].location)
-
+    def get_vm(self, vm_name):
         identity = ResourceIdentity(
-            resource_name=result.resources[0].name,
-            resource_type='virtualMachines',
-            api_version=api_versions[0],
-            resource_namespace='Microsoft.Compute')
-        resource_result = self._resource_client.resources.get(
-            self._resource_group,
-            identity)
-        resource = resource_result.resource
+            resource_name=vm_name,
+            resource_type=self.VIRTUAL_MACHINES,
+            api_version=self.COMPUTE_RESOURCE_PROVIDER_VERSION,
+            resource_namespace=self.COMPUTE_RESOURCE_PROVIDER_NAME)
+        resource_result = self._resource_client.resources.get(self._resource_group, identity)
+        return resource_result.resource
+
+    def _create_or_update_with_tag(self, resource, identity):
+        # To ensure the the Microsoft.Compute resource provider will do goal-seeking even if the state
+        # of the VM did not change we will update a tag in every PUT requeut with a UUID
+        resource.tags = { 'updateId' : str(uuid.uuid4()) }
+        result = self._resource_client.resources.create_or_update(self._resource_group, identity,
+                  GenericResource(location=resource.location,
+                  properties=resource.properties,
+                  tags=resource.tags))
+        print("create_or_update returned result.request_id %s and result.status_code %s" % (result.request_id, result.status_code))
+        return result
+
+    def _create_or_update_and_wait_for_success(self, resource, vm_name):
+        identity = ResourceIdentity(
+            resource_name=vm_name,
+            resource_type=self.VIRTUAL_MACHINES,
+            api_version=self.COMPUTE_RESOURCE_PROVIDER_VERSION,
+            resource_namespace=self.COMPUTE_RESOURCE_PROVIDER_NAME)
+        result = self._create_or_update_with_tag(resource, identity)
+    
+        # We need to wait on provisioning State to Success
+        success = False
+        timeout_count = 0
+
+        while success is False:
+            time.sleep(1)
+            timeout_count += 1
+            update_result = self._resource_client.resources.get(self._resource_group, identity)
+            properties = json.loads(update_result.resource.properties)
+
+            print("waited for %s s provisioningState is %s" % (timeout_count, properties["provisioningState"]))
+
+            if (properties['provisioningState'] == "Failed"):
+                # Something went wrong, let's try PUT again
+                result = self._create_or_update_with_tag(self, resource, identity)
+
+            # Wait for Success
+            if (properties['provisioningState'] == "Succeeded"):
+                success = True
+
+            if timeout_count > self._async_timeout:
+                #TODO: Add details to exception
+                raise AzureAsynchronousTimeout()
+
+        return result
+
+    def _attach_or_detach_disk(self, vm_name, vhd_name, vhd_size_in_gibs, detach=False):
+        # Check current VM State first.  If it is bad we wait to do a no-op update first to try and fix it
+        resource = self.get_vm(vm_name)
         properties = json.loads(resource.properties)
+
+        if (properties['provisioningState'] == "Failed"):
+            self._create_or_update_and_wait(resource, identity)
+            resource = self.get_vm(vm_name)
+            properties = json.loads(resource.properties)
+
         if (not detach):
             # attach specified disk
             properties['storageProfile']['dataDisks'].append({
-                "lun": self.compute_next_lun(properties['storageProfile']
-                                                       ['dataDisks']),
-                "name": vhd_name,
-                "createOption": "Attach",
-                "vhd": {
-                    "uri": vhd_link
-                },
-                "caching": "None"})
-            # Azure engineering recommended a workaround
-            # to bad machine state by updating the tag of the VM with the disk
-            resource.tags = {'dummy': str(uuid.uuid4())}
-        else:
-            # detach specified disk
+                      "lun": self.compute_next_lun(properties['storageProfile']['dataDisks']),
+                      "name": vhd_name,
+                      "createOption": "Attach",
+                      "vhd": {
+                          "uri": self._storage_client.make_blob_url(self._disk_container, vhd_name + ".vhd")
+                      },
+                      "caching": "None"
+                  })
+
+        else:      # detach specified disk
             for i in range(len(properties['storageProfile']['dataDisks'])):
                 d = properties['storageProfile']['dataDisks'][i]
                 if d['name'] == vhd_name:
                     del properties['storageProfile']['dataDisks'][i]
-                    break
-
+                    break;
+        
         resource.properties = json.dumps(properties)
-        self._resource_client.resources.create_or_update(
-            self._resource_group,
-            identity,
-            GenericResource(location=resource.location,
-                            properties=resource.properties,
-                            tags=resource.tags))
+        self._create_or_update_and_wait_for_success(resource, vm_name)
