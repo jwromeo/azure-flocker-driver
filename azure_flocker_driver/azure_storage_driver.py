@@ -6,7 +6,6 @@ import sys
 from bitmath import Byte, GiB
 from azure.storage import BlobService
 from azure_utils import DiskManager
-from azure_utils.auth_token import AuthToken
 from eliot import Message, to_file
 from zope.interface import implementer
 
@@ -70,11 +69,13 @@ class AzureStorageBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume``.
         """
         self._instance_id = self.compute_instance_id()
-        auth_token = AuthToken.get_token_from_client_credentials(
-            azure_config['subscription_id'],
-            azure_config['tenant_id'],
-            azure_config['client_id'],
-            azure_config['client_secret'])
+        # TODO: Auth has changed, file removed so making this none for now
+        # auth_token = AuthToken.get_token_from_client_credentials(
+        #     azure_config['subscription_id'],
+        #     azure_config['tenant_id'],
+        #     azure_config['client_id'],
+        #     azure_config['client_secret'])
+        auth_token = None
         creds = SubscriptionCloudCredentials(azure_config['subscription_id'],
                                              auth_token)
         self._resource_client = ResourceManagementClient(creds)

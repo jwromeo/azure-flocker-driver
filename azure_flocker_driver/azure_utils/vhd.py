@@ -24,23 +24,20 @@ class Vhd(object):
 
         # Create a new page blob as a blank disk
         azure_storage_client.create_container(container_name)
-        azure_storage_client.put_blob(
+        azure_storage_client.create_blob(
             container_name=container_name,
             blob_name=name,
-            blob=None,
-            x_ms_blob_type='PageBlob',
-            x_ms_blob_content_type='application/octet-stream',
-            x_ms_blob_content_length=size_in_bytes)
+            content_length=size_in_bytes)
+
         # for disk to be a valid vhd it requires a vhd footer
         # on the last 512 bytes
         vhd_footer = Vhd.generate_vhd_footer(size_in_bytes)
-        azure_storage_client.put_page(
+        azure_storage_client.update_page(
             container_name=container_name,
             blob_name=name,
             page=vhd_footer,
-            x_ms_page_write='update',
-            x_ms_range='bytes=' + str((size_in_bytes - 512)) +
-                       '-' + str(size_in_bytes - 1))
+            start_range=size_in_bytes-512,
+            end_range=size_in_bytes-1)
 
         # for on-prem and azure china to override via env
         if 'STORAGE_HOST_NAME' in os.environ:
