@@ -21,7 +21,7 @@ class Vhd(object):
         # 512 bytes.  So, the size is increased accordingly to allow
         # for the vhd footer.
         size_in_bytes = size_in_bytes + 512
-
+        
         # Create a new page blob as a blank disk
         azure_storage_client.create_container(container_name)
         azure_storage_client.create_blob(

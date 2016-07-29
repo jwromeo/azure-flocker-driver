@@ -4,6 +4,7 @@ from eliot import Logger
 from azure.storage.blob import PageBlobService
 from azure.common.credentials import ServicePrincipalCredentials
 from azure.mgmt.resource.resources import ResourceManagementClient
+from azure.mgmt.compute import ComputeManagementClient
 import os
 import yaml
 
@@ -27,11 +28,15 @@ class DiskCreateTestCase(unittest.TestCase):
         self._resource_client = ResourceManagementClient(
             creds,
             azure_config['subscription_id'])
+        self._compute_client = ComputeManagementClient(
+            creds,
+            azure_config['subscription_id'])
         self._page_blob_service = PageBlobService(
             account_name=azure_config['storage_account_name'],
             account_key=azure_config['storage_account_key'])
         self._manager = DiskManager(
             self._resource_client,
+            self._compute_client,
             self._page_blob_service,
             azure_config['storage_account_container'],
             azure_config['group_name'],
