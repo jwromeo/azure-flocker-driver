@@ -1,4 +1,5 @@
 from arm_disk_manager import DiskManager
+from arm_disk_manager import AzureOperationNotAllowed
 from twisted.trial import unittest
 from eliot import Logger
 from azure.storage.blob import PageBlobService
@@ -73,7 +74,7 @@ class DiskCreateTestCase(unittest.TestCase):
         self.assertEqual(found, False, 'Expected disk: '
                          + azure_config['test_vhd_name'] +
                          ' not to be listed in DiskManager.list_disks')
-
+                         
     def test_attach_blank_vhd(self):
         node_name = azure_config['test_vm_name']
         vhd_name = azure_config['test_vhd_name']
@@ -115,3 +116,69 @@ class DiskCreateTestCase(unittest.TestCase):
                          azure_config['test_vhd_name'] +
                          ' should not to be listed in '
                          'DiskManager.list_disks')
+
+    def test_delete_lun_0(self):
+        node_name = azure_config['test_vm_name']
+        vhd_name = azure_config['test_vhd_name']
+
+        self._manager.create_disk(azure_config['test_vhd_name'], 2)
+        disks = self._manager.list_disks()
+        found = False
+        for disk in disks:
+            if disk.name == azure_config['test_vhd_name']:
+                found = True
+                break
+        self.assertEqual(found, True,
+                         'Expected disk: ' +
+                         azure_config['test_vhd_name'] +
+                         ' to be listed in DiskManager.list_disks')
+
+        self._manager.attach_disk(node_name, vhd_name, 2)
+        attached = self._manager.is_disk_attached(node_name, vhd_name)
+        self.assertEqual(attached, True,
+                         'Expected disk: ' +
+                         azure_config['test_vhd_name'] +
+                         ' should be attached to vm: ' + node_name)
+
+        lun0Disk = None
+        vm_disks = self._manager.list_attached_disks(node_name)
+        for disk in vm_disks:
+            if disk['lun'] == 0:
+                lun0Disk = disk['name'].replace('.vhd', '')
+                break
+        self.assertNotEqual(lun0Disk, None,
+                            'After an attach of any disk, lun0 should '
+                            'have a disk attached to vm: ' + node_name)
+        self.assertNotEqual(lun0Disk, vhd_name,
+                            'Lun-0 disk is special and should not be '
+                            'the same as the test_vhd ' + 
+                            azure_config['test_vhd_name'])
+        exceptionCaught = False
+        try:
+            self._manager.detach_disk(node_name, lun0Disk)
+        except AzureOperationNotAllowed:
+            exceptionCaught = True
+        self.assertEqual(exceptionCaught, True,
+                         'Detaching lun-0 should result in an '
+                         'exception.  vm: ' + node_name + ', '
+                         'lun-0 disk: ' + lun0Disk)
+
+        self._manager.detach_disk(node_name, vhd_name)
+        attached = self._manager.is_disk_attached(node_name, vhd_name)
+        self.assertEqual(attached, False,
+                         'Expected disk: ' +
+                         azure_config['test_vhd_name'] +
+                         ' should not be attached to vm: ' + node_name)
+
+        self._manager.destroy_disk(vhd_name)
+        disks = self._manager.list_disks()
+        found = False
+        for disk in disks:
+            if disk.name == vhd_name:
+                found = True
+                break
+        self.assertEqual(found, False, 'Expected disk: ' +
+                         azure_config['test_vhd_name'] +
+                         ' should not to be listed in '
+                         'DiskManager.list_disks')
+

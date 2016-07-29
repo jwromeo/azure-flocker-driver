@@ -30,6 +30,12 @@ class AzureVMSizeNotSupported(Exception):
         pass
 
 
+class AzureOperationNotAllowed(Exception):
+
+    def __init__(self):
+        pass
+
+
 class DiskManager(object):
 
     # Resource provider constants
@@ -293,6 +299,10 @@ class DiskManager(object):
             for i in range(len(properties['storageProfile']['dataDisks'])):
                 d = properties['storageProfile']['dataDisks'][i]
                 if d['name'] == vhd_name:
+                    if d['lun'] == 0:
+                        # lun-0 is special, throw an exception if attempting
+                        # to detach that disk.
+                        raise AzureOperationNotAllowed();
                     del properties['storageProfile']['dataDisks'][i]
                     break
 
