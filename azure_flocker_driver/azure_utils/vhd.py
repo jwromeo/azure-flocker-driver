@@ -20,14 +20,14 @@ class Vhd(object):
         # The blob itself, must include a footer which is an additional
         # 512 bytes.  So, the size is increased accordingly to allow
         # for the vhd footer.
-        size_in_bytes = size_in_bytes + 512
+        size_in_bytes_with_footer = size_in_bytes + 512
         
         # Create a new page blob as a blank disk
         azure_storage_client.create_container(container_name)
         azure_storage_client.create_blob(
             container_name=container_name,
             blob_name=name,
-            content_length=size_in_bytes)
+            content_length=size_in_bytes_with_footer)
 
         # for disk to be a valid vhd it requires a vhd footer
         # on the last 512 bytes
@@ -36,8 +36,8 @@ class Vhd(object):
             container_name=container_name,
             blob_name=name,
             page=vhd_footer,
-            start_range=size_in_bytes-512,
-            end_range=size_in_bytes-1)
+            start_range=size_in_bytes_with_footer-512,
+            end_range=size_in_bytes_with_footer-1)
 
         # for on-prem and azure china to override via env
         if 'STORAGE_HOST_NAME' in os.environ:
