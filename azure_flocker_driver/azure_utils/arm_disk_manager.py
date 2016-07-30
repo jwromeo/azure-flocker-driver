@@ -1,5 +1,4 @@
 from azure.mgmt.resource.resources.models import GenericResource
-from azure.mgmt.compute.operations import VirtualMachineSizesOperations
 from bitmath import GiB
 from vhd import Vhd
 import uuid
@@ -68,16 +67,17 @@ class DiskManager(object):
             array.append(s.lower().replace(' ', ''))
         return array
 
-    def get_max_luns_for_vm_size(self, vm_size):
+    def _get_max_luns_for_vm_size(self, vm_size):
         max_luns = 0
-        vmSizes = self._compute_client.virtual_machine_sizes.list(self._location)
+        vmSizes = self._compute_client.virtual_machine_sizes.list(
+            self._location)
         for vm in vmSizes:
             if vm.name == vm_size:
                 max_luns = vm.max_data_disk_count
                 break
         return max_luns
 
-    def _vm_has_empty_lun0(self, diskInfo):
+    def _is_lun_0_empty(self, diskInfo):
         lun0Empty = True
         for disk in diskInfo:
             if disk['lun'] == 0:
@@ -85,12 +85,12 @@ class DiskManager(object):
                 break
         return lun0Empty
 
-    def compute_next_lun(self, maxLuns, data_disks):
+    def _compute_next_lun(self, total_luns, data_disks):
         nextLun = -1
         usedLuns = []
         for i in range(0, len(data_disks)):
             usedLuns.append(data_disks[i]['lun'])
-        for lun in range(1, maxLuns):
+        for lun in range(1, total_luns):
             if lun not in usedLuns:
                 nextLun = lun
                 break
@@ -98,22 +98,42 @@ class DiskManager(object):
             raise AzureInsufficientLuns()
         return nextLun
 
-    def attach_disk(self, vm_name, vhd_name, vhd_size_in_gibs):
-        self._attach_or_detach_disk(vm_name, vhd_name, vhd_size_in_gibs)
+    def _attach_disk(self, vm_name, vhd_name, vhd_size_in_gibs, lun):
+        self._attach_or_detach_disk(vm_name, vhd_name, vhd_size_in_gibs, lun)
 
         timeout_count = 0
         while self.is_disk_attached(vm_name, vhd_name) is False:
             time.sleep(1)
             timeout_count += 1
-
             if timeout_count > self._async_timeout:
                 raise AzureAsynchronousTimeout()
 
+    def attach_disk(self, vm_name, vhd_name, vhd_size_in_gibs):
+        # get VM information
+        vm_resource = self.get_vm(vm_name)
+        vm_properties = vm_resource.properties
+        vm_size = vm_resource.properties['hardwareProfile']['vmSize']
+        vm_luns = self._get_max_luns_for_vm_size(vm_size)
+
+        # first check and see if we need to add a special place holder
+        # on lun-0
+        if self._is_lun_0_empty(vm_properties['storageProfile']['dataDisks']):
+            print("Need to attach reserved disk to lun 0")
+            self.create_disk(self.LUN0_RESERVED_VHD_NAME, 1)
+            self._attach_disk(vm_name, self.LUN0_RESERVED_VHD_NAME, 1, 0)
+            vm_resource = self.get_vm(vm_name)
+            vm_properties = vm_resource.properties
+
+        lun = self._compute_next_lun(vm_luns,
+                                     vm_properties['storageProfile']
+                                                  ['dataDisks'])
+        self._attach_disk(vm_name, vhd_name, vhd_size_in_gibs, lun)
+
         return
 
-    def detach_disk(self, vm_name, vhd_name):
-        self._attach_or_detach_disk(vm_name, vhd_name, 0, True)
-
+    def detach_disk(self, vm_name, vhd_name, allow_lun0_detach=False):
+        self._attach_or_detach_disk(vm_name, vhd_name, 0,
+                                    0, True, allow_lun0_detach)
         timeout_count = 0
         while self.is_disk_attached(vm_name, vhd_name) is True:
             time.sleep(1)
@@ -216,6 +236,7 @@ class DiskManager(object):
             if (properties['provisioningState'] == "Failed"):
                 # Something went wrong, let's try PUT again
                 result = self._create_or_update_with_tag(resource, vm_name)
+                properties = result.properties
 
             # Wait for Success
             if (properties['provisioningState'] == "Succeeded"):
@@ -231,60 +252,24 @@ class DiskManager(object):
                                vm_name,
                                vhd_name,
                                vhd_size_in_gibs,
-                               detach=False):
+                               lun,
+                               detach=False,
+                               allow_lun_0_detach=False):
         # Check current VM State first.  If it is bad we wait to do a
         # no-op update first to try and fix it
         resource = self.get_vm(vm_name)
         properties = resource.properties
 
         if (properties['provisioningState'] == "Failed"):
+            print("\nWHO ARE YOU!\n")
             self._create_or_update_and_wait_for_success(resource, vm_name)
             resource = self.get_vm(vm_name)
             properties = resource.properties
 
         if (not detach):
-            # determine LUNs available by VM size
-            vmSize = properties['hardwareProfile']['vmSize']
-            vmLuns = self.get_max_luns_for_vm_size(vmSize)
-            if vmLuns == 0:
-                raise AzureElementNotFound()
-            elif vmLuns == 1:
-                # The driver requires that lun-0 be reserved for
-                # a blank/place holder disk.
-                raise AzureVMSizeNotSupported()
-
-            # how many disks are currently in use for the VM
-            usedLuns = len(properties['storageProfile']['dataDisks'])
-            if usedLuns == vmLuns:
-                raise AzureInsufficientLuns()
-
-            reservedLun0Link = None
-            if usedLuns == 0 or self._vm_has_empty_lun0(properties['storageProfile']['dataDisks']):
-                # TODO: Need to attach empty / reserved disk on to lun-0
-                print("Need to add lun-0 reserved disk")
-                vhdName = self.LUN0_RESERVED_VHD_NAME
-                reservedLun0Link = self.create_disk(vhdName, 1)
-
-            # attach new disks
-            # if lun0 needed, add that
-            if reservedLun0Link != None:
-                properties['storageProfile']['dataDisks'].append({
-                    "lun": 0,
-                    "name": self.LUN0_RESERVED_VHD_NAME,
-                    "createOption": "Attach",
-                    "vhd": {
-                        "uri": self._storage_client.make_blob_url(
-                            self._disk_container,
-                            self.LUN0_RESERVED_VHD_NAME + ".vhd")
-                    },
-                    "caching": "None"
-                })
-                
             # attach specified disk
             properties['storageProfile']['dataDisks'].append({
-                "lun": self.compute_next_lun(
-                    vmLuns,
-                    properties['storageProfile']['dataDisks']),
+                "lun": lun,
                 "name": vhd_name,
                 "createOption": "Attach",
                 "vhd": {
@@ -292,17 +277,18 @@ class DiskManager(object):
                         self._disk_container,
                         vhd_name + ".vhd")
                 },
-                "caching": "None"
+                "caching": "None",
+                "diskSizeGB": vhd_size_in_gibs
             })
 
         else:      # detach specified disk
             for i in range(len(properties['storageProfile']['dataDisks'])):
                 d = properties['storageProfile']['dataDisks'][i]
                 if d['name'] == vhd_name:
-                    if d['lun'] == 0:
+                    if d['lun'] == 0 and not allow_lun_0_detach:
                         # lun-0 is special, throw an exception if attempting
                         # to detach that disk.
-                        raise AzureOperationNotAllowed();
+                        raise AzureOperationNotAllowed()
                     del properties['storageProfile']['dataDisks'][i]
                     break
 

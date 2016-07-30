@@ -43,103 +43,37 @@ class DiskCreateTestCase(unittest.TestCase):
             azure_config['group_name'],
             azure_config['location'])
 
-    def test_create_blank_vhd(self):
-        link = self._manager.create_disk(azure_config['test_vhd_name'], 2)
-        self.assertEqual(link,
-                         'https://' +
-                         self._page_blob_service.account_name +
-                         '.blob.core.windows.net/' +
-                         azure_config['storage_account_container'] +
-                         '/' + azure_config['test_vhd_name'] + '.vhd')
+    def _has_lun0_disk(self, node_name):
+        vm_disks = self._manager.list_attached_disks(node_name)
+        for disk in vm_disks:
+            if disk['lun'] == 0:
+                return True
+        return False
 
-        disks = self._manager.list_disks()
-        found = False
-        for disk in disks:
-            if disk.name == azure_config['test_vhd_name']:
-                found = True
-                break
-        self.assertEqual(found, True,
-                         'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
-                         ' to be listed in DiskManager.list_disks')
-
-        self._manager.destroy_disk(azure_config['test_vhd_name'])
-        disks = self._manager.list_disks()
-        found = False
-        for disk in disks:
-            if disk.name == azure_config['test_vhd_name']:
-                found = True
-                break
-
-        self.assertEqual(found, False, 'Expected disk: '
-                         + azure_config['test_vhd_name'] +
-                         ' not to be listed in DiskManager.list_disks')
-                         
-    def test_attach_blank_vhd(self):
-        node_name = azure_config['test_vm_name']
-        vhd_name = azure_config['test_vhd_name']
-
-        self._manager.create_disk(azure_config['test_vhd_name'], 2)
-        disks = self._manager.list_disks()
-        found = False
-        for disk in disks:
-            if disk.name == azure_config['test_vhd_name']:
-                found = True
-                break
-        self.assertEqual(found, True,
-                         'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
-                         ' to be listed in DiskManager.list_disks')
-
-        self._manager.attach_disk(node_name, vhd_name, 2)
-        attached = self._manager.is_disk_attached(node_name, vhd_name)
-        self.assertEqual(attached, True,
-                         'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
-                         ' should be attached to vm: ' + node_name)
-
-        self._manager.detach_disk(node_name, vhd_name)
-        attached = self._manager.is_disk_attached(node_name, vhd_name)
-        self.assertEqual(attached, False,
-                         'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
-                         ' should not be attached to vm: ' + node_name)
-
-        self._manager.destroy_disk(vhd_name)
+    def _create_disk(self, vhd_name, vhd_size_in_gibs):
+        print("creating disk " + vhd_name + ", size " + str(vhd_size_in_gibs))
+        link = self._manager.create_disk(vhd_name, vhd_size_in_gibs)
         disks = self._manager.list_disks()
         found = False
         for disk in disks:
             if disk.name == vhd_name:
                 found = True
                 break
-        self.assertEqual(found, False, 'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
-                         ' should not to be listed in '
-                         'DiskManager.list_disks')
-
-    def test_delete_lun_0(self):
-        node_name = azure_config['test_vm_name']
-        vhd_name = azure_config['test_vhd_name']
-
-        self._manager.create_disk(azure_config['test_vhd_name'], 2)
-        disks = self._manager.list_disks()
-        found = False
-        for disk in disks:
-            if disk.name == azure_config['test_vhd_name']:
-                found = True
-                break
         self.assertEqual(found, True,
-                         'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
+                         'Expected disk: ' + vhd_name +
                          ' to be listed in DiskManager.list_disks')
+        return link
 
-        self._manager.attach_disk(node_name, vhd_name, 2)
+    def _attach_disk(self, node_name, vhd_name, vhd_size_in_gibs):
+        print("attaching disk " + vhd_name + ", node " + node_name)
+        self._manager.attach_disk(node_name, vhd_name, vhd_size_in_gibs)
         attached = self._manager.is_disk_attached(node_name, vhd_name)
         self.assertEqual(attached, True,
-                         'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
+                         'Expected disk: ' + vhd_name +
                          ' should be attached to vm: ' + node_name)
 
+    def _check_for_lun_0_disk(self, node_name, vhd_name):
+        print("checking for lun 0 on " + node_name)
         lun0Disk = None
         vm_disks = self._manager.list_attached_disks(node_name)
         for disk in vm_disks:
@@ -151,25 +85,32 @@ class DiskCreateTestCase(unittest.TestCase):
                             'have a disk attached to vm: ' + node_name)
         self.assertNotEqual(lun0Disk, vhd_name,
                             'Lun-0 disk is special and should not be '
-                            'the same as the test_vhd ' + 
-                            azure_config['test_vhd_name'])
+                            'the same as the test_vhd ' + vhd_name)
+        return lun0Disk
+
+    def _try_to_detach_disk_on_lun_0(self, node_name, lun0_disk):
+        print("attempted lun 0 detach on " + node_name)
         exceptionCaught = False
         try:
-            self._manager.detach_disk(node_name, lun0Disk)
+            self._manager.detach_disk(node_name, lun0_disk)
         except AzureOperationNotAllowed:
             exceptionCaught = True
         self.assertEqual(exceptionCaught, True,
                          'Detaching lun-0 should result in an '
                          'exception.  vm: ' + node_name + ', '
-                         'lun-0 disk: ' + lun0Disk)
+                         'lun-0 disk: ' + lun0_disk)
 
-        self._manager.detach_disk(node_name, vhd_name)
+    def _detach_disk(self, node_name, vhd_name, allow_lun0=False):
+        print("detach disk " + vhd_name + ", node " + node_name)
+        self._manager.detach_disk(node_name, vhd_name, allow_lun0)
         attached = self._manager.is_disk_attached(node_name, vhd_name)
         self.assertEqual(attached, False,
                          'Expected disk: ' +
                          azure_config['test_vhd_name'] +
                          ' should not be attached to vm: ' + node_name)
 
+    def _destroy_disk(self, vhd_name):
+        print("destroy disk " + vhd_name)
         self._manager.destroy_disk(vhd_name)
         disks = self._manager.list_disks()
         found = False
@@ -177,8 +118,51 @@ class DiskCreateTestCase(unittest.TestCase):
             if disk.name == vhd_name:
                 found = True
                 break
-        self.assertEqual(found, False, 'Expected disk: ' +
-                         azure_config['test_vhd_name'] +
+        self.assertEqual(found, False, 'Expected disk: ' + vhd_name +
                          ' should not to be listed in '
                          'DiskManager.list_disks')
 
+    def test_delete_lun_0(self):
+        node_name = azure_config['test_vm_name']
+        vhd_name = azure_config['test_vhd_name']
+
+        # does the VM have an existing disk attached to Lun 0?
+        # if so, we will not remove it at end of the test
+        lun0_exists = self._has_lun0_disk(node_name)
+
+        # create the test vhd
+        self._create_disk(vhd_name, 2)
+
+        # attach it
+        self._attach_disk(node_name, vhd_name, 2)
+
+        # make sure there is a disk on lun 0
+        lun0_disk = self._check_for_lun_0_disk(node_name, vhd_name)
+
+        # attempt to delete the disk on lun 0
+        self._try_to_detach_disk_on_lun_0(node_name, lun0_disk)
+
+        # detach the test vhd
+        self._detach_disk(node_name, vhd_name)
+
+        # delete the test_vhd
+        self._destroy_disk(vhd_name)
+
+        # to return VM to proper state, if lun 0 was not present
+        # at start of test, then clean up to original state
+        if not lun0_exists:
+            self._detach_disk(node_name, lun0_disk, True)
+            self._destroy_disk(lun0_disk)
+
+    def test_create_blank_vhd(self):
+        # create a blank vhd and verify the link
+        link = self._create_disk(azure_config['test_vhd_name'], 2)
+        self.assertEqual(link,
+                         'https://' +
+                         self._page_blob_service.account_name +
+                         '.blob.core.windows.net/' +
+                         azure_config['storage_account_container'] +
+                         '/' + azure_config['test_vhd_name'] + '.vhd')
+
+        # delete the test vhd
+        self._destroy_disk(azure_config['test_vhd_name'])
