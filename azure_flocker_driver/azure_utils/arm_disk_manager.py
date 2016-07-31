@@ -1,4 +1,6 @@
 from azure.mgmt.resource.resources.models import GenericResource
+from azure.mgmt.compute.models import DataDisk
+from azure.mgmt.compute.models import VirtualHardDisk
 from bitmath import GiB
 from vhd import Vhd
 import uuid
@@ -255,41 +257,58 @@ class DiskManager(object):
                                lun,
                                detach=False,
                                allow_lun_0_detach=False):
-        # Check current VM State first.  If it is bad we wait to do a
-        # no-op update first to try and fix it
-        resource = self.get_vm(vm_name)
-        properties = resource.properties
-
-        if (properties['provisioningState'] == "Failed"):
-            self._create_or_update_and_wait_for_success(resource, vm_name)
-            resource = self.get_vm(vm_name)
-            properties = resource.properties
-
+        vmcompute = self._compute_client.virtual_machines.get(
+            self._resource_group,
+            vm_name)
         if (not detach):
-            # attach specified disk
-            properties['storageProfile']['dataDisks'].append({
-                "lun": lun,
-                "name": vhd_name,
-                "createOption": "Attach",
-                "vhd": {
-                    "uri": self._storage_client.make_blob_url(
-                        self._disk_container,
-                        vhd_name + ".vhd")
-                },
-                "caching": "None",
-                "diskSizeGB": vhd_size_in_gibs
-            })
-
-        else:      # detach specified disk
-            for i in range(len(properties['storageProfile']['dataDisks'])):
-                d = properties['storageProfile']['dataDisks'][i]
-                if d['name'] == vhd_name:
-                    if d['lun'] == 0 and not allow_lun_0_detach:
+            vhd_url = self._storage_client.make_blob_url(self._disk_container,
+                                                         vhd_name + ".vhd")
+            disk = DataDisk(lun=lun,
+                            name=vhd_name,
+                            vhd=VirtualHardDisk(vhd_url),
+                            caching="None",
+                            create_option="attach",
+                            disk_size_gb=vhd_size_in_gibs)
+            vmcompute.storage_profile.data_disks.append(disk)
+        else:
+            for i in range(len(vmcompute.storage_profile.data_disks)):
+                disk = vmcompute.storage_profile.data_disks[i]
+                if disk.name == vhd_name:
+                    if disk.lun == 0 and not allow_lun_0_detach:
                         # lun-0 is special, throw an exception if attempting
                         # to detach that disk.
                         raise AzureOperationNotAllowed()
-                    del properties['storageProfile']['dataDisks'][i]
+                    del vmcompute.storage_profile.data_disks[i]
                     break
-
-        resource.properties = properties
-        self._create_or_update_and_wait_for_success(resource, vm_name)
+        result = self._compute_client.virtual_machines.create_or_update(
+            self._resource_group,
+            vm_name,
+            vmcompute)
+        # result.wait()
+        timeout_count = 0
+        while True:
+            done = result.done()
+            if done:
+                vmcompute = self._compute_client.virtual_machines.get(
+                    self._resource_group,
+                    vm_name)
+                if vmcompute.provisioning_state != "Succeeded":
+                    print("Provisioning ended up in failed state. "
+                          "Adding updateId tag.")
+                    if vmcompute.tags is not None:
+                        vmcompute.tags['updateId'] = str(uuid.uuid4())
+                    else:
+                        vmcompute.tags = {'updateId': str(uuid.uuid4())}
+                    result = \
+                        self._compute_client.virtual_machines.create_or_update(
+                            self._resource_group,
+                            vm_name,
+                            vmcompute)
+                else:
+                    print("Operation finished.")
+                    break
+            time.sleep(1)
+            timeout_count += 1
+            if timeout_count > self._async_timeout:
+                raise AzureAsynchronousTimeout()
+            print("Waiting " + str(timeout_count) + " seconds for operation.")
