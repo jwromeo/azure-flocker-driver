@@ -261,7 +261,6 @@ class DiskManager(object):
         properties = resource.properties
 
         if (properties['provisioningState'] == "Failed"):
-            print("\nWHO ARE YOU!\n")
             self._create_or_update_and_wait_for_success(resource, vm_name)
             resource = self.get_vm(vm_name)
             properties = resource.properties
