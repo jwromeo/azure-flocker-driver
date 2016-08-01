@@ -2,6 +2,7 @@ import datetime
 import uuid
 import os
 
+
 class Vhd(object):
 
     def __init__():
@@ -19,27 +20,24 @@ class Vhd(object):
         # The blob itself, must include a footer which is an additional
         # 512 bytes.  So, the size is increased accordingly to allow
         # for the vhd footer.
-        size_in_bytes = size_in_bytes + 512
+        size_in_bytes_with_footer = size_in_bytes + 512
 
         # Create a new page blob as a blank disk
         azure_storage_client.create_container(container_name)
-        azure_storage_client.put_blob(
+        azure_storage_client.create_blob(
             container_name=container_name,
             blob_name=name,
-            blob=None,
-            x_ms_blob_type='PageBlob',
-            x_ms_blob_content_type='application/octet-stream',
-            x_ms_blob_content_length=size_in_bytes)
+            content_length=size_in_bytes_with_footer)
+
         # for disk to be a valid vhd it requires a vhd footer
         # on the last 512 bytes
         vhd_footer = Vhd.generate_vhd_footer(size_in_bytes)
-        azure_storage_client.put_page(
+        azure_storage_client.update_page(
             container_name=container_name,
             blob_name=name,
             page=vhd_footer,
-            x_ms_page_write='update',
-            x_ms_range='bytes=' + str((size_in_bytes - 512)) +
-                       '-' + str(size_in_bytes - 1))
+            start_range=size_in_bytes_with_footer-512,
+            end_range=size_in_bytes_with_footer-1)
 
         # for on-prem and azure china to override via env
         if 'STORAGE_HOST_NAME' in os.environ:
@@ -49,6 +47,40 @@ class Vhd(object):
         return('https://' + azure_storage_client.account_name +
                '.' + storage_host_name + '/' + container_name +
                '/' + name)
+
+    @staticmethod
+    def calculate_geometry(size):
+        # this value taken from how Azure generates geometry values for VHDs
+        vhd_sector_length = 512
+
+        total_sectors = size / vhd_sector_length
+        if total_sectors > 65535 * 16 * 255:
+            total_sectors = 65535 * 16 * 255
+
+        if total_sectors > 65535 * 16 * 63:
+            sectors_per_track = 255
+            heads = 16
+            cylinder_times_heads = int(total_sectors / sectors_per_track)
+        else:
+            sectors_per_track = 17
+            cylinder_times_heads = int(total_sectors / sectors_per_track)
+
+            heads = int((cylinder_times_heads + 1023) / 1024)
+            if heads < 4:
+                heads = 4
+
+            if cylinder_times_heads >= (heads * 1024) or heads > 16:
+                sectors_per_track = 31
+                heads = 16
+                cylinder_times_heads = int(total_sectors / sectors_per_track)
+
+            if cylinder_times_heads >= (heads * 1024):
+                sectors_per_track = 63
+                heads = 16
+                cylinder_times_heads = int(total_sectors / sectors_per_track)
+        cylinders = int(cylinder_times_heads / heads)
+
+        return cylinders, heads, sectors_per_track
 
     @staticmethod
     def generate_vhd_footer(size):
@@ -105,9 +137,12 @@ class Vhd(object):
             bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
         footer_dict['current_size'] = \
             bytearray.fromhex(hex(size).replace('0x', '').zfill(16))
-        # ox820=2080 cylenders, 0x10=16 heads, 0x3f=63 sectors per cylndr,
+        # given the size, calculate the geometry -- 2 bytes cylinders,
+        # 1 byte heads, 1 byte sectors
+        (cylinders, heads, sectors) = Vhd.calculate_geometry(size)
         footer_dict['disk_geometry'] = \
-            bytearray([0x08, 0x20, 0x10, 0x3f])
+            bytearray([((cylinders >> 8) & 0xff), (cylinders & 0xff),
+                      (heads & 0xff), (sectors & 0xff)])
         # 0x2 = fixed hard disk
         footer_dict['disk_type'] = bytearray([0x00, 0x00, 0x00, 0x02])
         # a uuid
