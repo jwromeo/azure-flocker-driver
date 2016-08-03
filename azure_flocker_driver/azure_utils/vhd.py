@@ -16,63 +16,6 @@ class Vhd(object):
         return
 
     @staticmethod
-    def _create_container(azure_storage_client,
-                          container_name):
-        # Check to see if container exists, if not, create it.
-        # The hoops here are mostly due to sporadic AzureHttpErrors related
-        # to calling the BlobService create_container APIs.
-        container_info = None
-        try:
-            container_info = \
-                azure_storage_client.get_container_properties(container_name)
-        except:
-            pass
-
-        if container_info is None:
-            create_attempts = 0
-            while create_attempts < 10:
-                try:
-                    azure_storage_client.create_container(container_name)
-                    verify_attempts = 0
-                    while verify_attempts < 5:
-                        try:
-                            container_info = \
-                                azure_storage_client.get_container_properties(
-                                    container_name)
-                            if container_info is not None:
-                                return
-                        except:
-                            try:
-                                container_info = \
-                                    azure_storage_client. \
-                                    get_container_properties(
-                                        container_name)
-                                if container_info is not None:
-                                    return
-                            except:
-                                pass
-                            time.sleep(2)
-                            pass
-                        finally:
-                            verify_attempts = verify_attempts + 1
-                except:
-                    try:
-                        container_info = \
-                            azure_storage_client.\
-                            get_container_properties(container_name)
-
-                    except:
-                        pass
-                    if container_info is not None:
-                        return
-                    time.sleep(2)
-                    pass
-                finally:
-                    create_attempts = create_attempts + 1
-        if container_info is None:
-            raise AzureOperationFailed()
-
-    @staticmethod
     def create_blank_vhd(azure_storage_client,
                          container_name,
                          name,
@@ -87,7 +30,7 @@ class Vhd(object):
         size_in_bytes_with_footer = size_in_bytes + 512
 
         # Create a new page blob as a blank disk
-        Vhd._create_container(azure_storage_client, container_name)
+        azure_storage_client.create_container(container_name)
         azure_storage_client.create_blob(
             container_name=container_name,
             blob_name=name,
