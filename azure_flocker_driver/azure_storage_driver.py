@@ -255,7 +255,7 @@ class AzureStorageBlockDeviceAPI(object):
         for vm in vms:
             for data_disk in vm.storage_profile.data_disks:
                 if 'flocker-' in data_disk.name:
-                    disk_name = data_disk.name.replace('.vhd','')
+                    disk_name = data_disk.name.replace('.vhd', '')
                     if disk_name in disks:
                         disk_info.append(
                             self._blockdevicevolume_from_azure_volume(
