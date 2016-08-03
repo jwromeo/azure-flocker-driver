@@ -1,6 +1,13 @@
 import datetime
 import uuid
 import os
+import time
+
+
+class AzureOperationFailed(Exception):
+
+    def __init__(self):
+            pass
 
 
 class Vhd(object):
