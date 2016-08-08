@@ -3,8 +3,9 @@ from .azure_storage_driver import (
     azure_driver_from_configuration
 )
 
+
 def api_factory(**kwargs):
-    
+
     return azure_driver_from_configuration(
         client_id=kwargs['client_id'],
         client_secret=kwargs['client_secret'],

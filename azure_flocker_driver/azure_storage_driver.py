@@ -1,6 +1,5 @@
 from uuid import UUID
 import socket
-import sys
 from bitmath import Byte, GiB
 from zope.interface import implementer
 import eliot
@@ -16,6 +15,7 @@ from flocker.node.agents.blockdevice import IBlockDeviceAPI, \
     BlockDeviceVolume, UnknownVolume, UnattachedVolume
 
 _logger = eliot.Logger()
+
 
 # Logging Helpers
 def log_info(message):
@@ -88,9 +88,6 @@ class AzureStorageBlockDeviceAPI(object):
         self._storage_account_name = azure_config['storage_account_name']
         self._disk_container_name = azure_config['storage_account_container']
         self._resource_group = azure_config['group_name']
-
-        #if azure_config['debug']:
-        #    to_file(sys.stdout)
 
     def allocation_unit(self):
         """
@@ -358,9 +355,9 @@ def azure_driver_from_configuration(client_id,
                                     client_secret,
                                     tenant_id,
                                     subscription_id,
-                                    storage_account_name,
-                                    storage_account_key,
-                                    storage_account_container,
+                                    saccount_name,
+                                    saccount_key,
+                                    saccount_cont,
                                     group_name,
                                     location,
                                     debug):
@@ -373,9 +370,9 @@ def azure_driver_from_configuration(client_id,
                                       client_secret=client_secret,
                                       tenant_id=tenant_id,
                                       subscription_id=subscription_id,
-                                      storage_account_name=storage_account_name,
-                                      storage_account_key=storage_account_key,
-                                      storage_account_container=storage_account_container,
+                                      storage_account_name=saccount_name,
+                                      storage_account_key=saccount_key,
+                                      storage_account_container=saccount_cont,
                                       group_name=group_name,
                                       location=location,
                                       debug=debug)

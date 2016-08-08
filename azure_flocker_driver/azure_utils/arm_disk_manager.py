@@ -46,7 +46,8 @@ class DiskManager(object):
     VIRTUAL_MACHINES = "virtualMachines"
     STORAGE_RESOURCE_PROVIDER_NAME = "Microsoft.Storage"
     STORAGE_RESORUCE_PROVIDER_VERSION = "2016-01-01"
-    LUN0_RESERVED_VHD_NAME = "lun0_reserved_" + str(socket.gethostname()).replace('.', '_')
+    LUN0_RESERVED_VHD_NAME = "lun0_reserved_" + \
+                             str(socket.gethostname()).replace('.', '_')
 
     def __init__(self,
                  resource_client,
