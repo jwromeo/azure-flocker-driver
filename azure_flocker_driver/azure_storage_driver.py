@@ -2,29 +2,28 @@ from uuid import UUID
 import socket
 import sys
 from bitmath import Byte, GiB
-from azure_utils.arm_disk_manager import DiskManager
-from eliot import Message, to_file
 from zope.interface import implementer
+import eliot
 
 from azure.storage.blob import PageBlobService
 from azure.common.credentials import ServicePrincipalCredentials
 from azure.mgmt.resource.resources import ResourceManagementClient
 from azure.mgmt.compute import ComputeManagementClient
-
+from azure_utils.arm_disk_manager import DiskManager
 from lun import Lun
+
 from flocker.node.agents.blockdevice import IBlockDeviceAPI, \
     BlockDeviceVolume, UnknownVolume, UnattachedVolume
 
+_logger = eliot.Logger()
 
 # Logging Helpers
 def log_info(message):
-
-    Message.new(Info=message).write()
+    eliot.Message.new(info=message).write(_logger)
 
 
 def log_error(message):
-
-    Message.new(Error=message).write()
+    eliot.Message.new(error=message).write(_logger)
 
 
 class UnsupportedVolumeSize(Exception):
@@ -90,8 +89,8 @@ class AzureStorageBlockDeviceAPI(object):
         self._disk_container_name = azure_config['storage_account_container']
         self._resource_group = azure_config['group_name']
 
-        if azure_config['debug']:
-            to_file(sys.stdout)
+        #if azure_config['debug']:
+        #    to_file(sys.stdout)
 
     def allocation_unit(self):
         """
@@ -128,10 +127,10 @@ class AzureStorageBlockDeviceAPI(object):
         self._manager.create_disk(disk_label, size_in_gb)
 
         return BlockDeviceVolume(
-            blockdevice_id=dataset_id,
+            blockdevice_id=unicode(disk_label),
             size=size,
             attached_to=None,
-            dataset_id=UUID(dataset_id))
+            dataset_id=dataset_id)
 
     def destroy_volume(self, blockdevice_id):
         """
@@ -146,7 +145,7 @@ class AzureStorageBlockDeviceAPI(object):
         disks = self._manager.list_disks()
         target_disk = None
         for disk in disks:
-            if disk.name == self._disk_label_for_dataset_id(blockdevice_id):
+            if disk.name == blockdevice_id:
                 target_disk = disk
                 break
 
@@ -178,7 +177,7 @@ class AzureStorageBlockDeviceAPI(object):
         disks = self._manager.list_disks()
         target_disk = None
         for disk in disks:
-            if disk.name == self._disk_label_for_dataset_id(blockdevice_id):
+            if disk.name == blockdevice_id:
                 target_disk = disk
                 break
         if target_disk is None:
@@ -268,7 +267,7 @@ class AzureStorageBlockDeviceAPI(object):
                         # list of blobs.
                         log_info(
                             "Disk attached, but not known in container: " +
-                            str(self._dataset_id_for_disk_label(disk_name)))
+                            disk_name)
 
         # each remaining disk should be added as not attached
         for disk in disks:
@@ -316,7 +315,7 @@ class AzureStorageBlockDeviceAPI(object):
         for disk in disk_list:
             if 'flocker-' not in disk.name:
                 continue
-            if disk.name == self._disk_label_for_dataset_id(blockdevice_id):
+            if disk.name == blockdevice_id:
                 target_disk = disk
                 break
 
@@ -355,13 +354,28 @@ class AzureStorageBlockDeviceAPI(object):
         )  # disk labels are formatted as flocker-<data_set_id>
 
 
-def azure_driver_from_configuration(config):
+def azure_driver_from_configuration(client_id,
+                                    client_secret,
+                                    tenant_id,
+                                    subscription_id,
+                                    storage_account_name,
+                                    storage_account_key,
+                                    storage_account_container,
+                                    group_name,
+                                    location,
+                                    debug):
     """
     Returns Flocker Azure BlockDeviceAPI from plugin config yml.
         :param dictonary config: The Dictonary representing
             the data from the configuration yaml
     """
-
-    # todo return azure storage driver api
-
-    return AzureStorageBlockDeviceAPI(**config)
+    return AzureStorageBlockDeviceAPI(client_id=client_id,
+                                      client_secret=client_secret,
+                                      tenant_id=tenant_id,
+                                      subscription_id=subscription_id,
+                                      storage_account_name=storage_account_name,
+                                      storage_account_key=storage_account_key,
+                                      storage_account_container=storage_account_container,
+                                      group_name=group_name,
+                                      location=location,
+                                      debug=debug)
