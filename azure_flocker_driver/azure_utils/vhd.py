@@ -1,7 +1,6 @@
 import datetime
 import uuid
 import os
-import time
 
 
 class AzureOperationFailed(Exception):

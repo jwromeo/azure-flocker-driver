@@ -7,11 +7,16 @@ from .azure_storage_driver import (
 def api_factory(**kwargs):
 
     return azure_driver_from_configuration(
-        service_name=kwargs[u"service_name"],
-        subscription_id=kwargs[u"subscription_id"],
-        storage_account_name=kwargs[u"storage_account_name"],
-        certificate_data_path=kwargs[u"./azure-cert.pem"],
-        debug=kwargs[u"debug"])
+        client_id=kwargs['client_id'],
+        client_secret=kwargs['client_secret'],
+        tenant_id=kwargs['tenant_id'],
+        subscription_id=kwargs['subscription_id'],
+        storage_account_name=kwargs['storage_account_name'],
+        storage_account_key=kwargs['storage_account_key'],
+        storage_account_container=kwargs['storage_account_container'],
+        group_name=kwargs['group_name'],
+        location=kwargs['location'],
+        debug=kwargs['debug'])
 
 FLOCKER_BACKEND = BackendDescription(
     name=u"azure_flocker_driver",
