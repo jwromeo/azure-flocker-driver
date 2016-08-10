@@ -17,33 +17,8 @@ class Lun(object):
         with open(os.devnull, 'w') as shutup:
             subprocess.call(['fdisk', '-l'], stdout=shutup, stderr=shutup)
 
-    @staticmethod
-    def compute_next_lun(azure_service_client, group_name, role_name):
-        vm_info = azure_service_client.get_role(
-            group_name,
-            group_name,
-            role_name)
-
-        vm_info.data_virtual_hard_disks = \
-            sorted(vm_info.data_virtual_hard_disks, key=lambda obj:
-                   obj.lun)
-        lun = 0
-        for i in range(0, len(vm_info.data_virtual_hard_disks)):
-            next_lun = vm_info.data_virtual_hard_disks[i].lun
-
-            if next_lun - i >= 1:
-                lun = next_lun - 1
-                break
-
-            if i == len(vm_info.data_virtual_hard_disks) - 1:
-                lun = next_lun + 1
-                break
-
-        return lun
-
     # Returns a string representing the block device path based
     # on a provided lun slot
-
     @staticmethod
     def get_device_path_for_lun(lun):
         """

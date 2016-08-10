@@ -5,6 +5,7 @@ from bitmath import GiB
 from vhd import Vhd
 import uuid
 import time
+import socket
 
 
 class AzureAsynchronousTimeout(Exception):
@@ -45,7 +46,8 @@ class DiskManager(object):
     VIRTUAL_MACHINES = "virtualMachines"
     STORAGE_RESOURCE_PROVIDER_NAME = "Microsoft.Storage"
     STORAGE_RESORUCE_PROVIDER_VERSION = "2016-01-01"
-    LUN0_RESERVED_VHD_NAME = "lun0_reserved"
+    LUN0_RESERVED_VHD_NAME = "lun0_reserved_" + \
+                             str(socket.gethostname()).replace('.', '_')
 
     def __init__(self,
                  resource_client,
@@ -150,9 +152,11 @@ class DiskManager(object):
         # will list a max of 5000 blobs, but there really shouldn't
         # be that many
         disks = self._storage_client.list_blobs(self._disk_container)
+        return_disks = []
         for disk in disks:
             disk.name = disk.name.replace('.vhd', '')
-        return disks
+            return_disks.append(disk)
+        return return_disks
 
     def destroy_disk(self, disk_name):
         self._storage_client.delete_blob(self._disk_container,
