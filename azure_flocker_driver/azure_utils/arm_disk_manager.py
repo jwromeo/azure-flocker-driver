@@ -8,6 +8,7 @@ from copy import deepcopy
 from vhd import Vhd
 import uuid
 import time
+import socket
 
 
 class AzureAsynchronousTimeout(Exception):

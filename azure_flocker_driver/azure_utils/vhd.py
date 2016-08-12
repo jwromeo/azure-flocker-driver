@@ -3,6 +3,12 @@ import uuid
 import os
 
 
+class AzureOperationFailed(Exception):
+
+    def __init__(self):
+            pass
+
+
 class Vhd(object):
 
     def __init__():
