@@ -46,14 +46,22 @@ class DiskCreateTestCase(unittest.TestCase):
     def _has_lun0_disk(self, node_name):
         vm_disks = self._manager.list_attached_disks(node_name)
         for disk in vm_disks:
-            if disk['lun'] == 0:
+            if disk.lun == 0:
                 return True
         return False
+
+    def _list_disk_blobs(self):
+        # will list a max of 5000 blobs, but there really shouldn't
+        # be that many in test
+        disks = self._page_blob_service.list_blobs(azure_config['storage_account_container'])
+        for disk in disks:
+            disk.name = disk.name.replace('.vhd', '')
+        return disks
 
     def _create_disk(self, vhd_name, vhd_size_in_gibs):
         print("creating disk " + vhd_name + ", size " + str(vhd_size_in_gibs))
         link = self._manager.create_disk(vhd_name, vhd_size_in_gibs)
-        disks = self._manager.list_disks()
+        disks = self._list_disk_blobs()
         found = False
         for disk in disks:
             if disk.name == vhd_name:
@@ -77,8 +85,8 @@ class DiskCreateTestCase(unittest.TestCase):
         lun0Disk = None
         vm_disks = self._manager.list_attached_disks(node_name)
         for disk in vm_disks:
-            if disk['lun'] == 0:
-                lun0Disk = disk['name'].replace('.vhd', '')
+            if disk.lun == 0:
+                lun0Disk = disk.name.replace('.vhd', '')
                 break
         self.assertNotEqual(lun0Disk, None,
                             'After an attach of any disk, lun0 should '
@@ -112,7 +120,7 @@ class DiskCreateTestCase(unittest.TestCase):
     def _destroy_disk(self, vhd_name):
         print("destroy disk " + vhd_name)
         self._manager.destroy_disk(vhd_name)
-        disks = self._manager.list_disks()
+        disks = self._list_disk_blobs()
         found = False
         for disk in disks:
             if disk.name == vhd_name:
@@ -166,3 +174,4 @@ class DiskCreateTestCase(unittest.TestCase):
 
         # delete the test vhd
         self._destroy_disk(azure_config['test_vhd_name'])
+
