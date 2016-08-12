@@ -143,6 +143,16 @@ class DiskManager(object):
 
         return
 
+    def list_disks(self):
+        # will list a max of 5000 blobs, but there really shouldn't
+        # be that many
+        disks = self._storage_client.list_blobs(self._disk_container)
+        return_disks = []
+        for disk in disks:
+            disk.name = disk.name.replace('.vhd', '')
+            return_disks.append(disk)
+        return return_disks
+
     def destroy_disk(self, disk_name):
         self._storage_client.delete_blob(self._disk_container,
                                          disk_name + '.vhd')
