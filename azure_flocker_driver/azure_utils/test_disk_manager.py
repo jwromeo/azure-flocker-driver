@@ -46,14 +46,17 @@ class DiskCreateTestCase(unittest.TestCase):
     def _has_lun0_disk(self, node_name):
         vm_disks = self._manager.list_attached_disks(node_name)
         for disk in vm_disks:
-            if disk['lun'] == 0:
+            if disk.lun == 0:
                 return True
         return False
+
+    def list_disks(self):
+        return self._manager.list_disks()
 
     def _create_disk(self, vhd_name, vhd_size_in_gibs):
         print("creating disk " + vhd_name + ", size " + str(vhd_size_in_gibs))
         link = self._manager.create_disk(vhd_name, vhd_size_in_gibs)
-        disks = self._manager.list_disks()
+        disks = self.list_disks()
         found = False
         for disk in disks:
             if disk.name == vhd_name:
@@ -77,8 +80,8 @@ class DiskCreateTestCase(unittest.TestCase):
         lun0Disk = None
         vm_disks = self._manager.list_attached_disks(node_name)
         for disk in vm_disks:
-            if disk['lun'] == 0:
-                lun0Disk = disk['name'].replace('.vhd', '')
+            if disk.lun == 0:
+                lun0Disk = disk.name.replace('.vhd', '')
                 break
         self.assertNotEqual(lun0Disk, None,
                             'After an attach of any disk, lun0 should '
@@ -112,7 +115,7 @@ class DiskCreateTestCase(unittest.TestCase):
     def _destroy_disk(self, vhd_name):
         print("destroy disk " + vhd_name)
         self._manager.destroy_disk(vhd_name)
-        disks = self._manager.list_disks()
+        disks = self.list_disks()
         found = False
         for disk in disks:
             if disk.name == vhd_name:
@@ -166,3 +169,4 @@ class DiskCreateTestCase(unittest.TestCase):
 
         # delete the test vhd
         self._destroy_disk(azure_config['test_vhd_name'])
+

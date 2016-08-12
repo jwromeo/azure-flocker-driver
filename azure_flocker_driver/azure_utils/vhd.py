@@ -45,14 +45,7 @@ class Vhd(object):
             start_range=size_in_bytes_with_footer-512,
             end_range=size_in_bytes_with_footer-1)
 
-        # for on-prem and azure china to override via env
-        if 'STORAGE_HOST_NAME' in os.environ:
-            storage_host_name = os.environ['STORAGE_HOST_NAME']
-        else:
-            storage_host_name = 'blob.core.windows.net'
-        return('https://' + azure_storage_client.account_name +
-               '.' + storage_host_name + '/' + container_name +
-               '/' + name)
+        return azure_storage_client.make_blob_url(container_name, name)
 
     @staticmethod
     def calculate_geometry(size):
