@@ -115,7 +115,7 @@ class DiskCreateTestCase(unittest.TestCase):
     def _destroy_disk(self, vhd_name):
         print("destroy disk " + vhd_name)
         self._manager.destroy_disk(vhd_name)
-        disks = self._list_disks()
+        disks = self.list_disks()
         found = False
         for disk in disks:
             if disk.name == vhd_name:
