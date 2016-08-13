@@ -33,18 +33,17 @@ class TestDriver(proxyForInterface(blockdevice.IBlockDeviceAPI, 'original')):
 
     def _cleanup(self):
         """Clean up testing artifacts."""
-        with self.original._client.open_connection() as api:
-            for vol in self.volumes.keys():
-                # Make sure it has been cleanly removed
-                try:
-                    self.original.detach_volume(self.volumes[vol])
-                except Exception:
-                    pass
+        for vol in self.volumes.keys():
+            # Make sure it has been cleanly removed
+            try:
+                self.original.detach_volume(self.volumes[vol])
+            except Exception:
+                pass
 
-                try:
-                    api.delete_volume(vol)
-                except Exception:
-                    LOG.exception('Error cleaning up volume.')
+            try:
+                self.original.destroy_volume(self.volumes[vol])
+            except Exception:
+                LOG.exception('Error cleaning up volume.')
 
     def create_volume(self, dataset_id, size):
         """Track all volume creation."""
