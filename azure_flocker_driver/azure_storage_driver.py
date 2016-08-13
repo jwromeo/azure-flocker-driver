@@ -366,13 +366,14 @@ def azure_driver_from_configuration(client_id,
         :param dictonary config: The Dictonary representing
             the data from the configuration yaml
     """
-    return AzureStorageBlockDeviceAPI(client_id=client_id,
-                                      client_secret=client_secret,
-                                      tenant_id=tenant_id,
-                                      subscription_id=subscription_id,
-                                      storage_account_name=storage_account_name,
-                                      storage_account_key=storage_account_key,
-                                      storage_account_container=storage_account_container,
-                                      group_name=group_name,
-                                      location=location,
-                                      debug=debug)
+    return AzureStorageBlockDeviceAPI(
+        client_id=client_id,
+        client_secret=client_secret,
+        tenant_id=tenant_id,
+        subscription_id=subscription_id,
+        storage_account_name=storage_account_name,
+        storage_account_key=storage_account_key,
+        storage_account_container=storage_account_container,
+        group_name=group_name,
+        location=location,
+        debug=debug)

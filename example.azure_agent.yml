@@ -1,0 +1,18 @@
+"version": 1
+"control-service":
+    "hostname": "<CONTROL_SERVICE_HOST>"
+    "port": 4524
+
+dataset:
+  backend: "azure_flocker_driver"
+  client_id: "<AZURE_CLIENT_ID>"
+  tenant_id: "<AZURE_TENANT_ID>"
+  client_secret: "<AZURE_CLIENT_SECRET>"
+  subscription_id: "<AZURE_SUBSCRIPTION_ID>"
+  storage_account_name: "<STORAGE_ACCOUNT_NAME>"
+  storage_account_key: "<STORAGE_ACCOUNT_KEY>"
+  storage_account_container: "<STORAGE_ACCOUNT_CONTAINER>"
+  group_name: "<AZURE_RESOURCE_GROUP_NAME>"
+  location: "<AZURE_RESOURCE_GROUP_LOCATION>"
+  async_timeout: 100000
+  debug: "false"

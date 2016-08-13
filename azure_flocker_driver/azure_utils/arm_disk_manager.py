@@ -1,14 +1,9 @@
-from azure.mgmt.resource.resources.models import GenericResource
 from azure.mgmt.compute.models import DataDisk
-from azure.mgmt.compute.models import StorageProfile
-from azure.mgmt.compute.models import VirtualMachine
 from azure.mgmt.compute.models import VirtualHardDisk
 from bitmath import GiB
-from copy import deepcopy
 from vhd import Vhd
 import uuid
 import time
-import socket
 
 
 class AzureAsynchronousTimeout(Exception):
@@ -121,7 +116,8 @@ class DiskManager(object):
         # on lun-0
         if self._is_lun_0_empty(vm.storage_profile.data_disks):
             lun0_disk_name = vm_name + "-" + self.LUN0_RESERVED_VHD_NAME_SUFFIX
-            print("Need to attach reserved disk named '%s' to lun 0" % lun0_disk_name)
+            print("Need to attach reserved disk named '%s' to lun 0" %
+                  lun0_disk_name)
             self.create_disk(lun0_disk_name, 1)
             self._attach_disk(vm_name, lun0_disk_name, 1, 0)
             vm = self.get_vm(vm_name)
@@ -175,7 +171,8 @@ class DiskManager(object):
 
         for disk_instance in vm.instance_view.disks:
             if disk_instance.name == disk_name:
-                return disk_instance.statuses[0].code == "ProvisioningState/succeeded"
+                return disk_instance.statuses[0].code == \
+                        "ProvisioningState/succeeded"
 
         return False
 
@@ -186,8 +183,9 @@ class DiskManager(object):
         disk_names = [d.name for d in disks_in_model]
 
         # If there's a disk in the instance view which is not in the model.
-        # This disk is stuck.  Add it to our list since we need to know about stuck disks
-        for disk_instance in vm.instance_view.disks:        
+        # This disk is stuck.  Add it to our list since we need to know
+        # about stuck disks
+        for disk_instance in vm.instance_view.disks:
             if disk_instance.name in disk_names is None:
                 disk = DataDisk(lun=-1,
                                 name=disk_instance.name)
@@ -202,9 +200,9 @@ class DiskManager(object):
             expand=expand)
 
     def _update_vm(self, vm_name, vm):
-        # To ensure the VM update will be a async update even if the VM did not change 
-        # we force a change to the VM by setting a tag in every PUT request with a UUID
-        
+        # To ensure the VM update will be a async update even if the
+        # VM did not change we force a change to the VM by setting a
+        # tag in every PUT request with a UUID
         if vm.tags is not None:
             vm.tags['updateId'] = str(uuid.uuid4())
         else:
@@ -229,7 +227,7 @@ class DiskManager(object):
             vhd_url = self._storage_client.make_blob_url(self._disk_container,
                                                          vhd_name + ".vhd")
             print("Attach disk name %s lun %s uri %s" %
-                 (vhd_name, lun, vhd_url))
+                  (vhd_name, lun, vhd_url))
             disk = DataDisk(lun=lun,
                             name=vhd_name,
                             vhd=VirtualHardDisk(vhd_url),
@@ -260,12 +258,12 @@ class DiskManager(object):
                 raise AzureAsynchronousTimeout()
 
             if not result.done():
-                continue 
+                continue
 
             updated = self.get_vm(vm_name)
 
             print("Waited for %s s provisioningState is %s" %
-                 (waited_sec, updated.provisioning_state))
+                  (waited_sec, updated.provisioning_state))
 
             if updated.provisioning_state == "Succeeded":
                 print("Operation finshed")
@@ -276,19 +274,22 @@ class DiskManager(object):
 
                 # Recovery from failed disk atatch-detach operation.
                 # For Attach Disk: Detach The Disk then Try To Attach Again
-                # For Detach Disk: Call update again, which always sets a tag, which forces the service to retry.
+                # For Detach Disk: Call update again, which always sets a tag,
+                #                  which forces the service to retry.
 
-                # is_from_retry is checked so we are not stuck in a loop calling ourself
-                if is_from_retry == False and not detach:
-                    print("Detach disk %s after failure, then try attach again" % vhd_name)
+                # is_from_retry is checked so we are not stuck in a loop
+                # calling ourself
+                if not is_from_retry and not detach:
+                    print("Detach disk %s after failure, then try attach again"
+                          % vhd_name)
 
                     self._attach_or_detach_disk(vm_name,
-                        vhd_name,
-                        vhd_size_in_gibs,
-                        lun,
-                        detach=True,
-                        allow_lun_0_detach=True,
-                        is_from_retry=True)
+                                                vhd_name,
+                                                vhd_size_in_gibs,
+                                                lun,
+                                                detach=True,
+                                                allow_lun_0_detach=True,
+                                                is_from_retry=True)
 
                 print("Retry disk action for disk %s" % vhd_name)
                 result = self._update_vm(vm_name, vmcompute)

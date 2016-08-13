@@ -169,4 +169,3 @@ class DiskCreateTestCase(unittest.TestCase):
 
         # delete the test vhd
         self._destroy_disk(azure_config['test_vhd_name'])
-
