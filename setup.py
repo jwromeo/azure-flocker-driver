@@ -13,9 +13,10 @@ setup(
     version='1.0',
     description='Azure Backend Plugin for ClusterHQ/Flocker ',
     long_description=long_description,
-    author='Steven Edouard',
-    author_email='sedouard@microsoft.com',
-    url='https://github.com/sedouard/azure-flocker-driver',
+    author='Jim Spring <jaspring@microsoft.com>, '
+           'Joseph Romeo <josrom@microsoft.com>',
+    author_email='jaspring@microsoft.com',
+    url='https://github.com/CatalystCode/azure-flocker-driver',
     license='Apache 2.0',
 
     classifiers=[

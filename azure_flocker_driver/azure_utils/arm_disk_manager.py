@@ -59,6 +59,9 @@ class DiskManager(object):
         self._disk_container = disk_container_name
         self._async_timeout = async_timeout
 
+        # ensure the container exists.
+        self._storage_client.create_container(disk_container_name)
+
     def _str_array_to_lower(self, str_arry):
         array = []
         for s in str_arry:
