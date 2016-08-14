@@ -182,7 +182,7 @@ class AzureStorageBlockDeviceAPI(object):
             raise UnknownVolume(blockdevice_id)
 
         (disk, vmname, lun) = self._get_disk_vmname_lun(blockdevice_id)
-        if vmname != None:
+        if vmname is not None:
             raise AlreadyAttachedVolume(blockdevice_id)
 
         self._manager.attach_disk(
@@ -320,7 +320,7 @@ class AzureStorageBlockDeviceAPI(object):
             if disk.name == blockdevice_id:
                 target_disk = disk
                 break
-        if target_disk == None:
+        if target_disk is None:
             return (None, None, None)
 
         vm_info = None
