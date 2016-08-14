@@ -12,7 +12,8 @@ from azure_utils.arm_disk_manager import DiskManager
 from lun import Lun
 
 from flocker.node.agents.blockdevice import IBlockDeviceAPI, \
-    BlockDeviceVolume, UnknownVolume, UnattachedVolume
+    BlockDeviceVolume, UnknownVolume, UnattachedVolume, \
+    AlreadyAttachedVolume
 
 _logger = eliot.Logger()
 
@@ -180,6 +181,10 @@ class AzureStorageBlockDeviceAPI(object):
         if target_disk is None:
             raise UnknownVolume(blockdevice_id)
 
+        (disk, vmname, lun) = self._get_disk_vmname_lun(blockdevice_id)
+        if vmname != None:
+            raise AlreadyAttachedVolume(blockdevice_id)
+
         self._manager.attach_disk(
             str(attach_to),
             target_disk.name,
@@ -315,6 +320,8 @@ class AzureStorageBlockDeviceAPI(object):
             if disk.name == blockdevice_id:
                 target_disk = disk
                 break
+        if target_disk == None:
+            return (None, None, None)
 
         vm_info = None
         vm_disk_info = None
@@ -340,9 +347,12 @@ class AzureStorageBlockDeviceAPI(object):
     def _blockdevicevolume_from_azure_volume(self, label, size,
                                              attached_to_name):
 
-        # azure will report the disk size excluding the 512 byte footer
+        # azure will report the disk size including the 512 byte footer
         # however flocker expects the exact value it requested for disk size
-        # so offset the reported size to flocker by 512 bytes
+        # so remove the offset when reportint the size to flocker by 512 bytes
+        if (size % self.allocation_unit()) == 512:
+            size = size - 512
+
         return BlockDeviceVolume(
             blockdevice_id=unicode(label),
             size=int(size),
