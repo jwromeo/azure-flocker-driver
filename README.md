@@ -34,7 +34,7 @@ Download the Azure driver to the node on which you want to use Azure storage. Th
 ```bash
 git clone https://github.com/CatalystCode/azure-flocker-driver
 cd azure-flocker-driver
-sudo /opt/flocker/bin/pip install .
+sudo /opt/flocker/bin/python setuppython setup.py install
 ```
 
 **_NOTE:_** Make sure to use the python version installed with Flocker or the driver will not be installed correctly.
