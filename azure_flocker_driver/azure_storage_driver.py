@@ -3,6 +3,7 @@ import socket
 from bitmath import Byte, GiB
 from zope.interface import implementer
 import eliot
+import threading
 
 from azure.storage.blob import PageBlobService
 from azure.common.credentials import ServicePrincipalCredentials
@@ -16,6 +17,8 @@ from flocker.node.agents.blockdevice import IBlockDeviceAPI, \
     AlreadyAttachedVolume
 
 _logger = eliot.Logger()
+
+_vmstate_lock = threading.Lock()
 
 
 # Logging Helpers
@@ -171,24 +174,34 @@ class AzureStorageBlockDeviceAPI(object):
         log_info('Attempting to attach ' + str(blockdevice_id)
                  + ' to ' + str(attach_to))
 
-        # Make sure disk is present.  Also, need the disk size is needed.
-        disks = self._manager.list_disks()
-        target_disk = None
-        for disk in disks:
-            if disk.name == blockdevice_id:
-                target_disk = disk
-                break
-        if target_disk is None:
-            raise UnknownVolume(blockdevice_id)
+        _vmstate_lock.acquire()
+        try:
+            # Make sure disk is present.  Also, need the disk size is needed.
+            disks = self._manager.list_disks()
+            target_disk = None
+            for disk in disks:
+                if disk.name == blockdevice_id:
+                    target_disk = disk
+                    break
+            if target_disk is None:
+                raise UnknownVolume(blockdevice_id)
 
-        (disk, vmname, lun) = self._get_disk_vmname_lun(blockdevice_id)
-        if vmname is not None:
-            raise AlreadyAttachedVolume(blockdevice_id)
+            (disk, vmname, lun) = self._get_disk_vmname_lun(blockdevice_id)
+            if vmname is not None:
+                if unicode(vmname) != self.compute_instance_id():
+                    raise AlreadyAttachedVolume(blockdevice_id)
+                else:
+                    return self._blockdevicevolume_from_azure_volume(
+                        blockdevice_id,
+                        target_disk.properties.content_length,
+                        attach_to)
 
-        self._manager.attach_disk(
-            str(attach_to),
-            target_disk.name,
-            int(GiB(bytes=target_disk.properties.content_length)))
+            self._manager.attach_disk(
+                str(attach_to),
+                target_disk.name,
+                int(GiB(bytes=target_disk.properties.content_length)))
+        finally:
+            _vmstate_lock.release()
 
         log_info('disk attached')
 
@@ -209,16 +222,20 @@ class AzureStorageBlockDeviceAPI(object):
         :returns: ``None``
         """
 
-        (target_disk, vm_name, lun) = \
-            self._get_disk_vmname_lun(blockdevice_id)
+        _vmstate_lock.acquire()
+        try:
+            (target_disk, vm_name, lun) = \
+                self._get_disk_vmname_lun(blockdevice_id)
 
-        if target_disk is None:
-            raise UnknownVolume(blockdevice_id)
+            if target_disk is None:
+                raise UnknownVolume(blockdevice_id)
 
-        if lun is None:
-            raise UnattachedVolume(blockdevice_id)
+            if lun is None:
+                raise UnattachedVolume(blockdevice_id)
 
-        self._manager.detach_disk(vm_name, target_disk)
+            self._manager.detach_disk(vm_name, target_disk)
+        finally:
+            _vmstate_lock.release()
 
     def get_device_path(self, blockdevice_id):
         """
@@ -252,8 +269,14 @@ class AzureStorageBlockDeviceAPI(object):
         disks = dict((d.name, d) for d in disks_in)
 
         # first handle disks attached to vms
+        vms_info = {}
         vms = self._compute_client.virtual_machines.list(self._resource_group)
         for vm in vms:
+            vm_info = self._compute_client.virtual_machines.get(
+                self._resource_group,
+                vm.name,
+                expand="instanceView")
+            vms_info[vm.name] = vm_info
             for data_disk in vm.storage_profile.data_disks:
                 if 'flocker-' in data_disk.name:
                     disk_name = data_disk.name.replace('.vhd', '')
@@ -270,6 +293,23 @@ class AzureStorageBlockDeviceAPI(object):
                         log_info(
                             "Disk attached, but not known in container: " +
                             disk_name)
+        for vm_info in vms_info:
+            vm = vms_info[vm_info]
+            if vm.instance_view is not None:
+                for disk in vm.instance_view.disks:
+                    if 'flocker-' in disk.name:
+                        disk_name = disk.name.replace('.vhd', '')
+                        if disk_name in disks:
+                            disk_size = disks[disk_name].properties.\
+                                content_length
+                            disk_size = disk_size - (disk_size %
+                                                     (1024 * 1024 * 1024))
+                            disk_info.append(
+                                self._blockdevicevolume_from_azure_volume(
+                                    disk_name,
+                                    disk_size,
+                                    vm.name))
+                            del disks[disk_name]
 
         # each remaining disk should be added as not attached
         for disk in disks:
