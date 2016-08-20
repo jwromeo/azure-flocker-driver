@@ -10,3 +10,6 @@ Flocker can help orchestrate and provision storage to your clustered docker cont
         - MongoDB, Cassandra, Postgres, MySQL, and more! 
 - Generally orchestrate and schedule your container applications across a cluster that optionally provides flexible shared storage when you need it.
 - Use it with [Docker Native Extensions](https://github.com/ClusterHQ/flocker-docker-plugin)
+
+## Authors
+This work is based off of the initial work of [Steve Edouard](https://github.com/sedouard).  It is currently being maintained by [Jim Spring](https://github.com/jmspring).

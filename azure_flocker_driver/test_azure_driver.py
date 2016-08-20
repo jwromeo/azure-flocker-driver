@@ -1,83 +1,105 @@
-# Copyright Hybrid Logic Ltd. and EMC Corporation.
-# See LICENSE file for details.
-
 """
 Functional tests for
-``flocker.node.agents.blockdevice.EMCAzureBlockDeviceAPI``
-using a real Azure cluster.
-Ideally emc drivers should be seperate like cinder driver,
-we may change thay in the future.
+``flocker.node.agents.blockdevice.AzureStorageBlockDeviceAPI``
 """
-
+import bitmath
+import logging
+import os
 from uuid import uuid4
+import yaml
 
-from bitmath import GiB
-
-from flocker.testtools import skip_except
+from flocker.node.agents import blockdevice
 from flocker.node.agents.test.test_blockdevice import (
-    make_iblockdeviceasyncapi_tests, make_iblockdeviceapi_tests
+    make_iblockdeviceapi_tests)
+from twisted.python.components import proxyForInterface
+from zope.interface import implementer
+
+from azure_storage_driver import (
+    azure_driver_from_configuration
 )
 
-from .testtools_azure_storage_driver import azure_test_driver_from_yaml
+MIN_ALLOCATION_SIZE = bitmath.GiB(1).bytes
+MIN_ALLOCATION_UNIT = MIN_ALLOCATION_SIZE
+
+LOG = logging.getLogger(__name__)
 
 
-def azureblockdeviceasyncapi_for_test(test_case):
+@implementer(blockdevice.IBlockDeviceAPI)
+class TestDriver(proxyForInterface(blockdevice.IBlockDeviceAPI, 'original')):
+    """Wrapper around driver class to provide test cleanup."""
+    def __init__(self, original):
+        self.original = original
+        self.volumes = {}
+
+    def _cleanup(self):
+        """Clean up testing artifacts."""
+        for vol in self.volumes.keys():
+            # Make sure it has been cleanly removed
+            try:
+                self.original.detach_volume(self.volumes[vol])
+            except Exception:
+                pass
+
+            try:
+                self.original.destroy_volume(self.volumes[vol])
+            except Exception:
+                LOG.exception('Error cleaning up volume.')
+
+    def create_volume(self, dataset_id, size):
+        """Track all volume creation."""
+        blockdevvol = self.original.create_volume(dataset_id, size)
+        self.volumes[u"%s" % dataset_id] = blockdevvol.blockdevice_id
+        return blockdevvol
+
+
+def create_driver(**config):
+    return azure_driver_from_configuration(
+        client_id=config['client_id'],
+        client_secret=config['client_secret'],
+        tenant_id=config['tenant_id'],
+        subscription_id=config['subscription_id'],
+        storage_account_name=config['storage_account_name'],
+        storage_account_key=config['storage_account_key'],
+        storage_account_container=config['storage_account_container'],
+        group_name=config['group_name'],
+        location=config['location'],
+        debug=config['debug'])
+
+
+def api_factory(test_case):
+    """Create a test instance of the block driver.
+
+    :param test_case: The specific test case instance.
+    :return: A test configured driver instance.
     """
-    Create a ``EMCAzureBlockDeviceAPI`` instance for use in tests.
-    :returns: A ``EMCCinderBlockDeviceAPI`` instance
-    """
-    return azure_test_driver_from_yaml(test_case)
+    logging.basicConfig(
+        format='%(asctime)s %(levelname)-7s [%(threadName)-19s]: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        level=logging.DEBUG,
+        filename='../driver.log')
+    test_config_path = os.environ.get(
+        'FLOCKER_CONFIG',
+        '../example.azure_agent.yml')
+    if not os.path.exists(test_config_path):
+        raise Exception('Functional test configuration not found.')
+
+    with open(test_config_path) as config_file:
+        config = yaml.load(config_file.read())
+
+    config = config.get('dataset', {})
+    test_driver = TestDriver(
+        create_driver(
+            **config))
+    test_case.addCleanup(test_driver._cleanup)
+    return test_driver
 
 
-def azure_factory():
-
-    return make_iblockdeviceasyncapi_tests(azureblockdeviceasyncapi_for_test)
-
-
-@skip_except(
-    supported_tests=[
-        'test_interface',
-        'test_list_volume_empty',
-        'test_listed_volume_attributes',
-        'test_created_is_listed',
-        'test_created_volume_attributes',
-        'test_destroy_unknown_volume',
-        'test_destroy_volume',
-        'test_destroy_destroyed_volume',
-        'test_attach_unknown_volume',
-        'test_attach_attached_volume',
-        'test_attach_elsewhere_attached_volume',
-        'test_attach_unattached_volume',
-        'test_attached_volume_listed',
-        'test_attach_volume_validate_size',
-        'test_list_attached_and_unattached',
-        'test_multiple_volumes_attached_to_host',
-        'test_detach_unknown_volume',
-        'test_detach_detached_volume',
-        'test_detach_volume',
-        'test_reattach_detached_volume',
-        'test_attach_destroyed_volume',
-        'test_get_device_path_unknown_volume',
-        'test_get_device_path_unattached_volume',
-        'test_get_device_path_device',
-        'test_get_device_path_device_repeatable_results',
-        'test_device_size',
-        'test_compute_instance_id_nonempty',
-        'test_compute_instance_id_unicode'
-    ]
-)
 class AzureStorageBlockDeviceAPIInterfaceTests(
-
     make_iblockdeviceapi_tests(
         blockdevice_api_factory=(
-            lambda test_case: azureblockdeviceasyncapi_for_test(test_case)
+            lambda test_case: api_factory(test_case)
         ),
-        minimum_allocatable_size=int(GiB(1).to_Byte().value),
-        device_allocation_unit=int(GiB(1).to_Byte().value),
-        unknown_blockdevice_id_factory=lambda test: unicode(uuid4())
-    )
-
-):
-    """
-    something
-    """
+        minimum_allocatable_size=MIN_ALLOCATION_SIZE,
+        device_allocation_unit=MIN_ALLOCATION_UNIT,
+        unknown_blockdevice_id_factory=lambda test: unicode(uuid4()))):
+    pass
